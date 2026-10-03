@@ -3,6 +3,6 @@
   "channel": "omicos-brand",
   "source_commit": "eb1404942ad60a776403fd4a9d3c85459bc5a8b0",
   "source_digest": "59e505f37b4e4adbb329af377545994ae5046271e2d7031e8e6193b30fe6d7c5",
-  "runtime_version": "0.15.0+omicos.5",
+  "runtime_version": "0.15.1",
   "distribution_approved": false
 }

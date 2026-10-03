@@ -135,13 +135,13 @@ describe('卡片上的状态', () => {
     }
   })
 
-  it('editable 保留 `{}` 紧凑标记，不再加一个写着「可编辑」的角标', async () => {
+  it('editable 在素材预览右上角显示可编辑角标', async () => {
     await mount([
       panel('Ok.pdf', { script: 'fig.py', capability: cap('editable') }),
     ])
     const card = cardOf('Ok.pdf')
     expect(card.querySelector('svg.icon-square-mouse-pointer')).not.toBeNull()
-    expect(card.textContent).not.toContain('可编辑')
+    expect(card.querySelector('[data-capability-badge]')?.textContent).toContain('可编辑')
   })
 
   it('状态进 aria-label：读屏器不靠角标的颜色或位置', async () => {

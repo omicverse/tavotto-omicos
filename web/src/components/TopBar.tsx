@@ -431,7 +431,7 @@ function ToolCluster({ layoutTools }: { layoutTools: boolean }) {
  * 画布标注工具（文字 / 形状 / 子图标签）。**只在画布排版模式出现**：
  * 它们画的是画布对象，而快速编辑那一屏只有一张图，画下去看不见。
  */
-function MarkTools() {
+export function MarkTools() {
   const { t } = useTranslation(['workspace', 'common'])
   const tool = useUiStore((s) => s.tool)
   const setTool = useUiStore((s) => s.setTool)

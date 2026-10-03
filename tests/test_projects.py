@@ -472,6 +472,30 @@ def test_reopening_same_project_reuses_context(client, tmp_path):
     assert again["id"] == first["id"] and again["reused"] is True
 
 
+def test_reopening_project_merges_sources_added_after_initial_open(client, tmp_path):
+    """A reused project must not keep a stale registry after external import.
+
+    Figure Studio can copy a managed ``.py``/artifact pair while the project
+    is already open.  Re-entering the project is a synchronization boundary;
+    the new stem must be parameterizable immediately and remain so on disk.
+    """
+    figs = _make_figs(tmp_path)
+    first = client.post("/api/projects/open", json={"path": str(figs)}).get_json()
+    engine_watch.stop(str(figs))  # make the re-open path, not polling, do the work
+
+    (figs / "imported.py").write_text(
+        "def main():\n    fig.savefig('imported.pdf')\n", encoding="utf-8"
+    )
+    (figs / "imported.pdf").write_bytes(b"%PDF-1.4\n")
+
+    again = client.post("/api/projects/open", json={"path": str(figs)}).get_json()
+    assert again["id"] == first["id"] and again["reused"] is True
+    ctx = m.PROJECTS[again["id"]]
+    assert ctx.registry.for_stem("imported")["script"] == "imported.py"
+    saved = json.loads(engine_registry.registry_path(figs).read_text(encoding="utf-8"))
+    assert saved["scripts"]["imported.py"]["stems"] == ["imported"]
+
+
 def test_close_project_leaves_others_alone(client, tmp_path):
     a, b = _make_figs(tmp_path, "close_a"), _make_figs(tmp_path, "close_b")
     ida = client.post("/api/projects/open", json={"path": str(a)}).get_json()["id"]

@@ -322,8 +322,12 @@ def _write_render_cache(
             if source_info is None:
                 pdfbackend.render_preview_png(src, width_px, tmp)
             else:
-                worker = _safe_worker(source_info["script"], source_info.get("entry", "__main__"), src.stem)
-                render_pdf = cached.with_name(f"{cached.stem}.{os.getpid()}-{threading.get_ident():x}.source.pdf")
+                worker = _safe_worker(
+                    source_info["script"], source_info.get("entry", "__main__"), src.stem
+                )
+                render_pdf = cached.with_name(
+                    f"{cached.stem}.{os.getpid()}-{threading.get_ident():x}.source.pdf"
+                )
                 worker.export(src.stem, [], str(render_pdf), "pdf", 300)
                 if not render_pdf.is_file() or render_pdf.stat().st_size == 0:
                     raise RuntimeError("script preview did not produce a PDF")
@@ -543,6 +547,7 @@ def safe_resolve(rel_id: str) -> Path:
 
 def _asset_stem(path: Path) -> str:
     from .engine import importscope
+
     return importscope.key(path.resolve().relative_to(require_project().resolve()).as_posix())
 
 
@@ -827,9 +832,11 @@ def _unhandled(exc):
 def omicos_help():
     return send_from_directory(WEB_DIST, "help.html")
 
+
 @app.get("/omicos-build.json")
 def omicos_build():
     return send_from_directory(WEB_DIST, "omicos-build.json")
+
 
 @app.get("/")
 def index():
@@ -1842,6 +1849,19 @@ def open_project(path_str: str, make_default: bool = True) -> dict:
     with _PROJECT_LOCK:
         existing = PROJECTS.get(pid)
     if existing is not None:
+        # Re-opening a project is also a synchronization boundary.  A source
+        # file may have been copied into the project while the UI was on
+        # another page (or while the watcher was between polls).  Refreshing
+        # here makes the on-disk registry authoritative before the canvas is
+        # opened again, instead of silently reusing a stale in-memory
+        # registry and treating the new material as layout-only.
+        try:
+            refresh_project(existing, reason="open")
+        except engine_refresh.RefreshError as exc:
+            # Keep the already-open project usable when an external edit is
+            # temporarily unreadable.  The watcher/manual refresh can retry;
+            # this is deliberately a warning rather than a second open path.
+            LOG.warning("重新打开项目时刷新失败（%s），保留现有注册表: %s", exc.code, exc)
         if make_default:
             DEFAULT_PROJECT = pid
         engine_config.touch_recent(str(path))
@@ -2742,10 +2762,16 @@ def api_registry():
         return jsonify(
             {"error": f"扫描失败: {exc}", "code": "scan_failed", "params": {"reason": str(exc)}}
         ), 400
-    registered_stems = {engine_discover.importscope.key(sc, s) for sc, c in reg.items() for s in c["stems"]}
+    registered_stems = {
+        engine_discover.importscope.key(sc, s) for sc, c in reg.items() for s in c["stems"]
+    }
     candidates = []
     for script, info in sorted(rep["scripts"].items()):
-        fresh = [s for s in info["stems"] if engine_discover.importscope.key(script, s) not in registered_stems]
+        fresh = [
+            s
+            for s in info["stems"]
+            if engine_discover.importscope.key(script, s) not in registered_stems
+        ]
         # 已登记且没有新产物就不再列为「未登记」——包括那些静态解不出文件名的
         # 脚本（它们已经靠试运行登记过了，再列一遍只会自相矛盾）。需要重新
         # 探测时从「已登记」那一栏走。
@@ -3515,7 +3541,11 @@ def api_engine_render():
     # 在这里，而它**既不在 worker 的 timings 里也不在 build 里**。不单独量出来，
     # 用户等的那十几秒在数据里就凭空消失了（第一版计时管道就是这么骗了自己）。
     get_ms = round((time.perf_counter() - t_get) * 1000, 3)
-    info = (engine_runtimeasset.resolve(rel_id, current_registry()) if engine_runtimeasset.is_runtime_id(rel_id) else current_registry().for_stem(_history_stem(rel_id, stem))) or {}
+    info = (
+        engine_runtimeasset.resolve(rel_id, current_registry())
+        if engine_runtimeasset.is_runtime_id(rel_id)
+        else current_registry().for_stem(_history_stem(rel_id, stem))
+    ) or {}
     cold = not worker.built
     # 三个事件都得带 pj：前端 renderStore 按 fileId 索引且不分项目，不带的话
     # 另一个标签页里同名的面板（到处都是的 Fig1.pdf）会跟着显示「正在构建…」
@@ -4448,7 +4478,9 @@ def api_engine_sync_overrides():
 def api_engine_history():
     """某张图的「更新原图」版本足迹（末位 = 当前基线）。"""
     worker, stem = _engine_worker(request.args.get("id", ""))
-    versions = load_baked().get(_history_stem(request.args.get("id", ""), stem), {}).get("versions") or []
+    versions = (
+        load_baked().get(_history_stem(request.args.get("id", ""), stem), {}).get("versions") or []
+    )
     return jsonify(
         {
             "versions": [
@@ -4466,7 +4498,9 @@ def api_engine_history_preview():
     worker, stem = _engine_worker(request.args.get("id", ""))
     n = int(request.args.get("n", -1))
     w = int(request.args.get("w", 400))
-    versions = load_baked().get(_history_stem(request.args.get("id", ""), stem), {}).get("versions") or []
+    versions = (
+        load_baked().get(_history_stem(request.args.get("id", ""), stem), {}).get("versions") or []
+    )
     patches = [] if n < 0 or n >= len(versions) else versions[n]["patches"]
     try:
         path = worker.preview_png(stem, patches, w, tag=f"hist{n}")

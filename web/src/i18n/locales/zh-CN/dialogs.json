@@ -138,10 +138,14 @@
     "savesIntoLabel": "保存到"
   },
   "mcp": {
+    "blankCanvasHint": "这是一个空白 Tavotto 画布。请从素材栏添加图形；添加对象后即可导出。",
+    "cancel": "取消",
     "confirmBoth": "仍要导出：已知悉 {{errors}} 条阻断项与 {{notVerifiable}} 条无法核验的项。确认会记入 proof report。",
     "confirmErrors": "仍要导出：已知悉 {{errors}} 条阻断项。确认会记入 proof report。",
     "exportBlockedTitle": "有阻断项或无法核验项：先在下方勾选确认",
     "exportBoth": "导出 PDF+PNG",
+    "export": "导出",
+    "exportCanvas": "导出当前画布",
     "exportPendingTitle": "还有改动没画上，等这一版渲染完再导出",
     "exported": "已导出 {{files}}",
     "issuesTitle": "出版规范预检",
@@ -155,6 +159,7 @@
     "pillTitle": "重新运行出版规范预检",
     "renderFailed": "渲染失败",
     "rendering": "正在重渲染",
+    "dpi": "位图 DPI",
     "splashConnecting": "正在连接 Codex…",
     "splashNoHost": "此画布要在支持 MCP Apps 的 Codex 里打开。没有 UI 的 host 里，同一套 图形工具 工具也能打开、改图、预检、导出。",
     "splashWaiting": "正在等待 打开图形工具 的结果…",

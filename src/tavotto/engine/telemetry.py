@@ -602,5 +602,7 @@ def reset_for_tests() -> None:
 
 # The host owns privacy policy; this channel sends no upstream telemetry.
 _standalone_hard_disabled = hard_disabled
+
+
 def hard_disabled():
     return True

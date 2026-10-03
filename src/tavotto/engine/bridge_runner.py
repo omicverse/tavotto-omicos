@@ -17,7 +17,7 @@
 | argv | `[脚本自身]` | **用户的原样** |
 | savefig | 吞掉 | **透传**（照常写文件）+ 捕获 |
 | 写/删守卫 | 有 | **无**（脚本拥有用户的全部权限） |
-| stdout | 重定向到 stderr | **原样是用户的**（协议走独立 socket） |
+| stdout | 重定向到 stderr | **用户输出仍保留，但统一为 UTF-8**（协议走独立 socket） |
 | 控制通道 | stdin/stdout 行协议 | 127.0.0.1 loopback + token |
 | 协议信封 | worker v1 | **同一个 worker v1**（`wireproto`） |
 | Figure 编辑语义 | `figsession` | **同一个 `figsession`** |
@@ -54,6 +54,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import socket
 import sys
 import threading
@@ -86,7 +87,7 @@ _boot_spec.loader.exec_module(bridgeboot)
 #: manifest / overrides**——它们在模块层 import matplotlib 与 numpy，而
 #: `import matplotlib` 会当场读 cwd 下的 matplotlibrc、钉死 rcParams，
 #: 用户脚本自己那句 `matplotlib.use(...)` 的语义就不一样了。
-_PHASE1 = ("figcapture", "patchspec")
+_PHASE1 = ("figcapture", "importscope", "patchspec")
 #: 第二阶段（屏障那一刻才装）：要 matplotlib/numpy 的那几个，而那时用户早就
 #: import 过了；外加只被它们平铺 import 到的纯标准库模块。
 #:
@@ -131,13 +132,25 @@ _REAL_SHOW = None
 # ---------------------------------------------------------------------------
 @contextlib.contextmanager
 def _no_capture():
-    """引擎自己出图的那一段：透传照旧，但不记进捕获表。"""
+    """引擎自己出图的那一段：透传照旧，但不记进捕获表。
+
+    OmicOS replay sources may install their own ``Figure.savefig`` gate to
+    keep sibling figures out of a selected session.  During a Tavotto-owned
+    export that gate must be temporarily removed; otherwise the private export
+    filename does not match the source stem and no PDF/PNG is written.
+    """
     global _CAPTURING
     prev = _CAPTURING
+    mfigure = sys.modules.get("matplotlib.figure")
+    previous_savefig = getattr(getattr(mfigure, "Figure", None), "savefig", None)
     _CAPTURING = False
+    if mfigure is not None and _REAL_SAVEFIG is not None:
+        mfigure.Figure.savefig = _REAL_SAVEFIG
     try:
         yield
     finally:
+        if mfigure is not None and previous_savefig is not None:
+            mfigure.Figure.savefig = previous_savefig
         _CAPTURING = prev
 
 
@@ -207,7 +220,13 @@ def collect_pyplot(plt) -> None:
     前端按 stem 索引一切。
     """
     global _DROPPED
-    stems, dropped = figcapture.collect_pyplot_figures(_CAPTURE, _SCRIPT_STEM[0], plt)
+    fallback_base = _SCRIPT_STEM[0]
+    if _SCRIPT_SOURCE_PATH and _SCRIPT_PROJECT_ROOT:
+        fallback_base = (
+            figcapture.managed_fallback_stem(_SCRIPT_SOURCE_PATH, _SCRIPT_PROJECT_ROOT)
+            or fallback_base
+        )
+    stems, dropped = figcapture.collect_pyplot_figures(_CAPTURE, fallback_base, plt)
     for stem in stems:
         _CAPTURE_SOURCE[stem] = figcapture.SOURCE_PYPLOT
     if dropped:
@@ -223,6 +242,8 @@ def collect_pyplot(plt) -> None:
 #: 兜底 stem 的基名（`<脚本名>`、`<脚本名>-2`…）。列表包一层是因为钩子闭包
 #: 在解析目标之前就装好了。
 _SCRIPT_STEM = ["figure"]
+_SCRIPT_SOURCE_PATH = ""
+_SCRIPT_PROJECT_ROOT = ""
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +268,7 @@ def run_script(target: str, argv: list) -> None:
     sys.path.insert(0, os.path.dirname(abspath))
     with io.open_code(abspath) as f:
         source = f.read()
+    source = _normalize_managed_source(source)
     # `dont_inherit=True` **是必须的**：本文件自己有 `from __future__ import
     # annotations`，而 `compile()` 默认会把**调用处生效的** future 语句一并
     # 传给被编译的代码。于是用户脚本会在不知情的情况下拿到 PEP 563 语义——
@@ -349,6 +371,67 @@ def _take_token() -> str:
     return os.environ.pop(TOKEN_ENV, "")
 
 
+def _configure_user_stdio_utf8() -> None:
+    """Keep user-script diagnostics printable on Windows locales.
+
+    The native bridge runs the user's interpreter directly. On a Chinese
+    Windows installation that interpreter commonly gives ``sys.stdout`` the
+    GBK codec, while scientific libraries such as OmicVerse print emoji or
+    other Unicode diagnostics during style setup. A direct run then raises
+    ``UnicodeEncodeError`` before the first figure is created, which Tavotto
+    can only report as an empty capture. The control protocol is on a
+    separate UTF-8 socket, so replacing the user streams' error policy does
+    not affect protocol framing or figure semantics.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
+
+
+_OMICOOS_COLUMN_SEM = re.compile(r"\b([A-Za-z_]\w*)\.sem\b(?!\s*\()")
+_WINDOWS_EXTENDED_PATH = re.compile(r"\\\\\?\\(?=[A-Za-z]:|UNC\\)")
+
+
+def _normalize_managed_source(source: str | bytes) -> str | bytes:
+    """Repair known portability hazards in managed replay sources.
+
+    OmicOS-generated multi-panel scripts historically used ``sub.sem`` for a
+    DataFrame column named ``sem``. Current pandas resolves that spelling to
+    ``DataFrame.sem`` (a method), so replay fails before the selected figure is
+    captured. They can also contain Windows extended paths (``\\?\\G:\\...``)
+    next to ordinary drive-letter paths. On Windows ``os.path.relpath`` treats
+    those spellings as different mounts and raises ``ValueError`` even when
+    both paths are on the same drive. Only the generated managed-source format
+    is eligible; ordinary user scripts and method calls such as ``df.sem()``
+    are left untouched.
+    """
+    if isinstance(source, bytes):
+        # ``io.open_code`` deliberately returns bytes so that CPython can honor
+        # a source encoding cookie when compiling the user script.  Managed
+        # OmicOS sources are UTF-8, but arbitrary user scripts must keep their
+        # original bytes and encoding semantics when no normalization applies.
+        try:
+            decoded = source.decode("utf-8")
+        except UnicodeDecodeError:
+            return source
+        normalized = _normalize_managed_source(decoded)
+        if normalized == decoded:
+            return source
+        return normalized.encode("utf-8")
+    if not source.startswith("# OmicOS managed figure source v1"):
+        return source
+    # Match only a prefix followed by an actual drive/UNC path.  A generated
+    # source may itself contain ``src.replace("\\\\?\\", "")``; a blind
+    # string replacement would corrupt that valid Python literal.
+    normalized = _WINDOWS_EXTENDED_PATH.sub("", source)
+    if ".sem" in normalized and re.search(r"[\"']sem[\"']\s*:", normalized):
+        normalized = _OMICOOS_COLUMN_SEM.sub(r'\1["sem"]', normalized)
+    return normalized
+
+
 class Control:
     """与父进程的一条控制连接。**只在主线程上使用。**"""
 
@@ -359,9 +442,8 @@ class Control:
         # Windows 的默认 stdio 编码跟系统区域走（常是 cp936/cp1252），而响应里
         # ensure_ascii=False——中文标签、µ、⁻¹ 一出现就 UnicodeEncodeError。
         #
-        # **刻意不 reconfigure 用户的 sys.stdout/stderr**（safe worker 那边会，
-        # 因为协议就跑在它的 stdout 上）。这里协议在独立 socket 上，而用户的
-        # stdio 是他程序的一部分——替他改编码就不是"与你自己敲那条命令等同"了。
+        # 用户 stdio 在 main() 中统一为 UTF-8；这里协议仍然走独立 socket，
+        # 不会把用户输出混入控制帧。
         self.rfile = self.sock.makefile("r", encoding="utf-8", newline="\n")
         self._send({HELLO_KEY: 1, "token": token, "pid": os.getpid(), "protocol_version": 1})
         line = self.rfile.readline()
@@ -718,13 +800,19 @@ def _derive_target_facts(args) -> None:
     module 目标的源文件要等 import 之后才知道，这里先给一个保守值，
     `main()` 在跑完之后按 `sys.modules['__main__'].__file__` 修正。
     """
+    global _SCRIPT_SOURCE_PATH, _SCRIPT_PROJECT_ROOT
+    _SCRIPT_SOURCE_PATH = ""
+    _SCRIPT_PROJECT_ROOT = args.project_root or ""
     if args.target_kind == "script":
         abspath = os.path.abspath(args.target)
         args.source_path = abspath
+        _SCRIPT_SOURCE_PATH = abspath
         stem = os.path.splitext(os.path.basename(abspath))[0]
     else:
         args.source_path = ""
         stem = args.target.rpartition(".")[2] or args.target
+    if _SCRIPT_SOURCE_PATH and _SCRIPT_PROJECT_ROOT:
+        stem = figcapture.managed_fallback_stem(_SCRIPT_SOURCE_PATH, _SCRIPT_PROJECT_ROOT) or stem
     _SCRIPT_STEM[0] = stem
     args.entry = "__main__"
     root = args.project_root or os.getcwd()
@@ -741,6 +829,7 @@ def _derive_target_facts(args) -> None:
 
 def main(argv: list | None = None) -> int:
     args = _parse_args(list(sys.argv[1:] if argv is None else argv))
+    _configure_user_stdio_utf8()
     if not args.out_dir:
         # **不往用户 home 里放一个 dotdir**。产物目录归 Tavotto 管
         # （父进程按 `config.data_dir()` 算好经 `--out-dir` 传进来），

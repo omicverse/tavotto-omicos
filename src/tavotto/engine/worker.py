@@ -40,6 +40,7 @@ import importlib
 import importlib.abc
 import json
 import os
+import re
 import runpy
 import shutil
 import sys
@@ -59,6 +60,30 @@ import matplotlib.figure as mfigure  # noqa: E402
 # 补进来、相对路径只读回退）与浏览器 playground **共用同一份实现**。抄一份
 # 进来的话，同一个脚本会在两个入口里产出不同的 stem——前端按 stem 索引一切。
 import figcapture  # noqa: E402
+
+_OMICOOS_COLUMN_SEM = re.compile(r"\b([A-Za-z_]\w*)\.sem\b(?!\s*\()")
+_WINDOWS_EXTENDED_PATH = re.compile(r"\\\\\?\\(?=[A-Za-z]:|UNC\\)")
+
+
+def _normalize_managed_source(source: str) -> str:
+    """Repair portability hazards in generated OmicOS replay sources.
+
+    Core-generated scripts may contain both ordinary drive-letter paths and
+    Windows extended paths (``\\\\?\\G:\\...``).  ``os.path.relpath`` rejects
+    that pair as different mounts even though they refer to the same drive.
+    Normalize the generated source before compiling it, while leaving ordinary
+    user scripts untouched.
+    """
+    if not source.startswith("# OmicOS managed figure source v1"):
+        return source
+    # Match only a prefix followed by an actual drive/UNC path.  A generated
+    # source may itself contain ``src.replace("\\\\?\\", "")``; a blind
+    # string replacement would corrupt that valid Python literal.
+    normalized = _WINDOWS_EXTENDED_PATH.sub("", source)
+    if ".sem" in normalized and re.search(r"[\"']sem[\"']\s*:", normalized):
+        normalized = _OMICOOS_COLUMN_SEM.sub(r'\1["sem"]', normalized)
+    return normalized
+
 
 # Figure 到手之后的编辑语义（instrument / manifest / override / 渲染 / 导出 /
 # 快照还原）与**信封语义**都不是 safe worker 私有的：native bridge（ADR 0020）
@@ -590,7 +615,26 @@ class Worker(wireproto.V1Handler):
         with contextlib.redirect_stdout(sys.stderr):
             if self.entry == "__main__":
                 try:
-                    script_namespace = runpy.run_path(str(self.script), run_name="__main__")
+                    source_text = self.script.read_text(encoding="utf-8")
+                    normalized = _normalize_managed_source(source_text)
+                    if normalized != source_text:
+                        namespace = {
+                            "__name__": "__main__",
+                            "__file__": str(self.script),
+                            "__cached__": None,
+                            "__doc__": None,
+                            "__loader__": None,
+                            "__package__": None,
+                            "__spec__": None,
+                        }
+                        exec(
+                            compile(normalized, str(self.script), "exec", dont_inherit=True),
+                            namespace,
+                            namespace,
+                        )
+                        script_namespace = namespace
+                    else:
+                        script_namespace = runpy.run_path(str(self.script), run_name="__main__")
                 except NameError:
                     # 只对未定义临时变量做一次恢复；其它异常仍保持原有失败语义。
                     print(
@@ -615,10 +659,14 @@ class Worker(wireproto.V1Handler):
         # 只在脚本真的 import 过 pyplot 时才问它：没 import 过就不可能有 pyplot
         # figure，而在这里 import 一次要白付几十毫秒（还会给纯 OO API 的脚本
         # 凭空建一个 figure 管理器）。
+        fallback_base = (
+            figcapture.managed_fallback_stem(self.script, self.figures_dir)
+            or self.script.stem
+        )
         _plt = sys.modules.get("matplotlib.pyplot")
         if _plt is not None:
             fallback, dropped = figcapture.collect_pyplot_figures(
-                self.session.capture, self.script.stem, _plt
+                self.session.capture, fallback_base, _plt
             )
             for stem in fallback:
                 self.session.capture_source[stem] = figcapture.SOURCE_PYPLOT
@@ -633,12 +681,16 @@ class Worker(wireproto.V1Handler):
                 self.dropped_figures = dropped
 
         if script_namespace is not None:
-            fallback, dropped = figcapture.collect_namespace_figures(
-                self.session.capture,
-                self.script.stem,
-                script_namespace,
-                lambda value: isinstance(value, mfigure.Figure),
-            )
+            collect_namespace = getattr(figcapture, "collect_namespace_figures", None)
+            if collect_namespace is None:
+                fallback, dropped = ([], 0)
+            else:
+                fallback, dropped = collect_namespace(
+                    self.session.capture,
+                    fallback_base,
+                    script_namespace,
+                    lambda value: isinstance(value, mfigure.Figure),
+                )
             for stem in fallback:
                 self.session.capture_source[stem] = figcapture.SOURCE_PYPLOT
             if dropped:

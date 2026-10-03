@@ -127,6 +127,70 @@ def test_conflict_excluded_from_draft_and_reported(figs):
     assert "two.py" not in cfg["scripts"]  # 只剩冲突 stem → 整个不进草稿
 
 
+def test_managed_replay_sources_use_their_explicit_target_stem(figs):
+    """OmicOS copies one managed replay source per imported material.
+
+    The source body can contain a shared savefig template, so AST discovery
+    alone would make the two copies claim the same stems.  The managed target
+    marker is the authoritative per-material binding.
+    """
+    body = """# OmicOS managed figure source v1
+_omicos_replay_target_stem = {stem!r}
+
+def main():
+    fig.savefig("shared.png")
+"""
+    _script(figs, "asset-a.py", body.format(stem="A"))
+    _script(figs, "asset-b.py", body.format(stem="B"))
+    _touch(figs, "A.png", "B.png")
+
+    cfg, rep = discover.build_draft(figs)
+    assert rep["conflicts"] == {}
+    assert cfg["scripts"]["asset-a.py"]["stems"] == ["A"]
+    assert cfg["scripts"]["asset-b.py"]["stems"] == ["B"]
+
+
+def test_managed_replay_sources_with_empty_marker_pair_by_asset_filename(figs):
+    """旧 OmicOS exports still pair a copied source with its same-stem image."""
+    (figs / "sources").mkdir()
+    _script(
+        figs / "sources",
+        "asset-a1b2c3-figure_1791042415039_4.py",
+        """# OmicOS managed figure source v1
+_omicos_replay_target_stem = ""
+
+def main():
+    fig.savefig("shared.png")
+""",
+    )
+    _touch(figs, "figure_1791042415039_4.png")
+
+    cfg, rep = discover.build_draft(figs)
+    assert rep["conflicts"] == {}
+    assert cfg["scripts"]["sources/asset-a1b2c3-figure_1791042415039_4.py"]["stems"] == [
+        "figure_1791042415039_4"
+    ]
+
+
+def test_managed_filename_fallback_does_not_guess_without_artifact(figs):
+    (figs / "sources").mkdir()
+    _script(
+        figs / "sources",
+        "asset-a1b2c3-figure_1791042415039_4.py",
+        """# OmicOS managed figure source v1
+_omicos_replay_target_stem = ""
+
+def main():
+    fig.savefig("shared.png")
+""",
+    )
+
+    info = discover.analyze_script(
+        figs / "sources" / "asset-a1b2c3-figure_1791042415039_4.py", figs
+    )
+    assert info["stems"] == ["shared"]
+
+
 def test_draft_loads_into_registry(figs):
     _script(figs, "fig_a.py", 'def main():\n    save(fig, "FigA_1")\n')
     cfg, _ = discover.build_draft(figs)

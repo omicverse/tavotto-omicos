@@ -50,6 +50,25 @@ describe('structured user errors, original support evidence', () => {
     await vi.waitFor(()=>expect(el.querySelector('[role=status]')!.textContent).toContain('unavailable'))
     expect(el.querySelector('[role=status]')!.textContent).not.toContain('Tavotto')
   })
+  it('falls back to the user-gesture-bound document copy command', async () => {
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+    const execCommandDescriptor = Object.getOwnPropertyDescriptor(document, 'execCommand')
+    const execCommand = vi.fn(() => true)
+    try {
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })
+      Object.defineProperty(document, 'execCommand', { configurable: true, value: execCommand })
+      const root=document.createElement('div');document.body.append(root);const el=mountFigureError(root)
+      const raw='legacy clipboard fallback';el.setFailure(figureFailure(raw),'en-US')
+      el.querySelector<HTMLButtonElement>('[data-copy-diagnostics]')!.click()
+      await vi.waitFor(() => expect(el.querySelector('[role=status]')!.textContent).toContain('copied'))
+      expect(execCommand).toHaveBeenCalledWith('copy')
+    } finally {
+      if (clipboardDescriptor) Object.defineProperty(navigator, 'clipboard', clipboardDescriptor)
+      else Reflect.deleteProperty(navigator, 'clipboard')
+      if (execCommandDescriptor) Object.defineProperty(document, 'execCommand', execCommandDescriptor)
+      else Reflect.deleteProperty(document, 'execCommand')
+    }
+  })
   it('uses raw HTTP payload rather than Error.stack and treats unknown codes as unknown', () => {
     const e=Object.assign(new Error('short summary'), {rawDiagnostic:'{"error":"Tavotto"}\r\n',code:'not-a-public-code'})
     expect(diagnosticText(e)).toBe(e.rawDiagnostic)

@@ -140,10 +140,14 @@
     "savesIntoLabel": "Save into"
   },
   "mcp": {
+    "blankCanvasHint": "This is a blank Tavotto canvas. Add figures from the asset panel; once an object is added, you can export it.",
+    "cancel": "Cancel",
     "confirmBoth": "Export anyway: I understand the {{errors}} blocking problems and {{notVerifiable}} items that can’t be verified automatically. The confirmation goes in the proof report.",
     "confirmErrors": "Export anyway: I understand the {{errors}} blocking problems. The confirmation goes in the proof report.",
     "exportBlockedTitle": "Blocking or not-verifiable items. Tick the confirmation below first.",
     "exportBoth": "Export PDF+PNG",
+    "export": "Export",
+    "exportCanvas": "Export current canvas",
     "exportPendingTitle": "Some edits aren’t drawn yet. Wait for this render, then export.",
     "exported": "Exported {{files}}",
     "issuesTitle": "Publication preflight",
@@ -157,6 +161,7 @@
     "pillTitle": "Run the publication preflight again",
     "renderFailed": "Render failed",
     "rendering": "Re-rendering",
+    "dpi": "Raster DPI",
     "splashConnecting": "Connecting to Codex…",
     "splashNoHost": "This canvas opens inside a Codex that supports MCP Apps. In a host without a UI, the same figure tools tools still open, edit, preflight and export the figure.",
     "splashWaiting": "Waiting for the result of the figure-opening tool…",

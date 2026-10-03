@@ -1,12 +1,14 @@
-import type { Manifest, PanelInfo } from '@/lib/api'
+import type { Manifest, PanelInfo, RegistryView } from '@/lib/api'
 import { VECTOR_PREVIEW, type PreviewMetadata } from '@/lib/previewBudget'
 import type { UiMessage } from '@/i18n'
 import { useAssetStore } from '@/store/assetStore'
-import { useDocumentStore } from '@/store/documentStore'
+import { useRuntimeAssetStore } from '@/store/runtimeAssetStore'
+import { useScriptLibraryStore } from '@/store/scriptLibraryStore'
+import { applyDerivedUpdate, useDocumentStore } from '@/store/documentStore'
 import { renderKey, svgPayloadBytes, useRenderStore } from '@/store/renderStore'
 import { useUiStore } from '@/store/uiStore'
 import { newId } from '@/lib/id'
-import type { PanelObject } from '@/types/document'
+import type { PanelObject, PanelOverride } from '@/types/document'
 
 /**
  * 内嵌会话的通用种子层：把「一张已经渲染好的图」灌进既有 stores，
@@ -33,6 +35,8 @@ export interface EmbeddedFigure {
   cost?: string
   manifest: Manifest
   svg: string | null
+  /** First-frame raster returned in the same MCP response, when selected. */
+  previewPngBase64?: string
   /**
    * 这一版的预览表示法（ADR 0022）。缺省按 `vector` 解读；`svg` 为 null 而
    * 引擎给出 `raster` 时，画布走位图显示——**编辑语义一个字都不变**。
@@ -40,6 +44,7 @@ export interface EmbeddedFigure {
   preview?: PreviewMetadata
   renderRevision?: number
   warnings?: string[]
+  overrides?: PanelOverride[]
 }
 
 export const embeddedFileIdFor = (stem: string) => `${stem}.pdf`
@@ -50,6 +55,7 @@ export function seedEmbeddedSession(
 ): { panelId: string; fileId: string } {
   const [wMm, hMm] = fig.manifest.size_mm
   const fileId = embeddedFileIdFor(fig.stem)
+  const overrides = fig.overrides ?? []
 
   const info: PanelInfo = {
     id: fileId,
@@ -61,6 +67,11 @@ export function seedEmbeddedSession(
     mtime: 0,
     script: fig.script,
     cost: fig.cost ?? 'medium',
+    preview_url: fig.previewPngBase64
+      ? `data:image/png;base64,${fig.previewPngBase64}`
+      : fig.svg
+        ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(fig.svg)}`
+        : null,
   }
   useAssetStore.setState({
     byId: { [fileId]: info },
@@ -70,6 +81,32 @@ export function seedEmbeddedSession(
     loading: false,
     error: null,
   })
+  // The MCP iframe has no HTTP project endpoint.  Keep the real opened figure
+  // in the ordinary asset store while marking the runtime list as loaded so
+  // AssetBrowser does not issue a cross-origin request.
+  useRuntimeAssetStore.setState({ assets: [], assetsLoading: false, assetsError: null })
+  const script = fig.script.trim()
+  if (script) {
+    const registryView: RegistryView = {
+      source: 'mcp-session',
+      scripts: {
+        [script]: { entry: 'main', cost: fig.cost ?? 'medium', notes: '', stems: [fig.stem] },
+      },
+      candidates: [],
+      conflicts: {},
+      all_scripts: [{
+        script,
+        registered: true,
+        static_stems: [fig.stem],
+        entry_candidates: ['main'],
+        reason: 'registered',
+        can_probe: false,
+      }],
+    }
+    useScriptLibraryStore.setState({ view: registryView, loading: false, loaded: true, error: null })
+  } else {
+    useScriptLibraryStore.setState({ view: null, loading: false, loaded: true, error: null })
+  }
 
   const panelId = newId('o')
   const panel: PanelObject = {
@@ -85,7 +122,7 @@ export function seedEmbeddedSession(
     nativeH: hMm,
     script: fig.script,
     cost: fig.cost,
-    overrides: [],
+    overrides,
   }
 
   const store = useDocumentStore.getState()
@@ -124,8 +161,8 @@ export function seedEmbeddedSession(
         warnings: fig.warnings ?? [],
         timings: {},
         stale: false,
-        lastPatches: '[]',
-        wantPatches: '[]',
+        lastPatches: JSON.stringify(overrides),
+        wantPatches: JSON.stringify(overrides),
         previewDpi: null,
       },
     },
@@ -138,6 +175,211 @@ export function seedEmbeddedSession(
   // 直接进图内编辑态：内嵌画布存在的全部理由就是改图里的元素
   useUiStore.getState().setElementPanel(panelId)
   return { panelId, fileId }
+}
+
+/** Append a complete sibling Tavotto session to the current real composition. */
+export function appendEmbeddedSession(
+  fig: EmbeddedFigure,
+  _historyLabel: UiMessage,
+): { panelId: string; fileId: string } {
+  const [wMm, hMm] = fig.manifest.size_mm
+  const fileId = embeddedFileIdFor(fig.stem)
+  const overrides = fig.overrides ?? []
+  const info: PanelInfo = {
+    id: fileId,
+    name: fig.stem,
+    folder: fig.project,
+    kind: 'pdf',
+    native_w_mm: wMm,
+    native_h_mm: hMm,
+    mtime: 0,
+    script: fig.script || undefined,
+    cost: fig.cost ?? 'medium',
+    preview_url: fig.previewPngBase64
+      ? `data:image/png;base64,${fig.previewPngBase64}`
+      : fig.svg
+        ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(fig.svg)}`
+        : null,
+  }
+  useAssetStore.setState((s) => ({
+    byId: { ...s.byId, [fileId]: info },
+    panels: s.panels.some((p) => p.id === fileId) ? s.panels : [...s.panels, info],
+    figuresDir: fig.project,
+    loaded: true,
+    loading: false,
+    error: null,
+  }))
+
+  const script = fig.script.trim()
+  if (script) {
+    useScriptLibraryStore.setState((s) => {
+      const view = s.view ?? { source: 'mcp-session', scripts: {}, candidates: [], conflicts: {}, all_scripts: [] }
+      const existing = view.scripts[script]
+      const allScripts = view.all_scripts.filter((entry) => entry.script !== script)
+      const current = view.all_scripts.find((entry) => entry.script === script)
+      allScripts.push({
+        script,
+        registered: true,
+        static_stems: Array.from(new Set([...(current?.static_stems ?? []), fig.stem])),
+        entry_candidates: current?.entry_candidates?.length ? current.entry_candidates : ['main'],
+        reason: 'registered',
+        can_probe: false,
+      })
+      return {
+        view: {
+          ...view,
+          scripts: {
+            ...view.scripts,
+            [script]: {
+              entry: existing?.entry ?? 'main',
+              cost: existing?.cost ?? fig.cost ?? 'medium',
+              notes: existing?.notes ?? '',
+              stems: Array.from(new Set([...(existing?.stems ?? []), fig.stem])),
+            },
+          },
+          all_scripts: allScripts,
+        },
+        loaded: true,
+        loading: false,
+        error: null,
+      }
+    })
+  }
+
+  const panelId = newId('o')
+  const doc = useDocumentStore.getState().doc
+  const right = doc.objects.reduce((x, o) => Math.max(x, o.x + o.w), 0)
+  const panel: PanelObject = {
+    id: panelId,
+    type: 'panel',
+    x: right + 8,
+    y: 0,
+    w: wMm,
+    h: hMm,
+    fileId,
+    fileKind: 'pdf',
+    nativeW: wMm,
+    nativeH: hMm,
+    script: fig.script || undefined,
+    cost: fig.cost,
+    overrides,
+  }
+  // Hydration is a load operation, not a user edit: no fake undo step or dirty flag.
+  applyDerivedUpdate({
+    doc: {
+      ...doc,
+      objects: [...doc.objects, panel],
+      page: {
+        w: Math.max(doc.page.w, panel.x + panel.w),
+        h: Math.max(doc.page.h, panel.y + panel.h),
+      },
+    },
+  })
+
+  const key = renderKey(fileId, overrides)
+  useRenderStore.setState((s) => ({
+    byKey: {
+      ...s.byKey,
+      [key]: {
+        fileId,
+        rev: fig.renderRevision ?? 1,
+        manifest: fig.manifest,
+        svg: fig.svg ? prepareEmbeddedSvg(fig.svg) : null,
+        svgBytes: fig.svg ? svgPayloadBytes(fig.svg, fig.preview ?? VECTOR_PREVIEW) : 0,
+        svgEvicted: false,
+        svgSeq: 0,
+        preview: fig.preview ?? VECTOR_PREVIEW,
+        status: 'ready',
+        error: null,
+        code: '',
+        module: '',
+        projectEnv: null,
+        dependencyRepair: null,
+        traceback: '',
+        warnings: fig.warnings ?? [],
+        timings: {},
+        stale: false,
+        lastPatches: JSON.stringify(overrides),
+        wantPatches: JSON.stringify(overrides),
+        previewDpi: null,
+      },
+    },
+    tracked: { ...s.tracked, [fileId]: true },
+    latest: { ...s.latest, [fileId]: key },
+  }))
+  return { panelId, fileId }
+}
+
+/**
+ * Register a figure returned while refreshing an already-open host project as
+ * a material only. Unlike appendEmbeddedSession this deliberately does not
+ * create a document panel, change the page size, or select the object. The
+ * user can insert it from the materials card when they choose.
+ */
+export function registerEmbeddedMaterial(fig: EmbeddedFigure): { fileId: string } {
+  const [wMm, hMm] = fig.manifest.size_mm
+  const fileId = embeddedFileIdFor(fig.stem)
+  const info: PanelInfo = {
+    id: fileId,
+    name: fig.stem,
+    folder: fig.project,
+    kind: 'pdf',
+    native_w_mm: wMm,
+    native_h_mm: hMm,
+    mtime: 0,
+    script: fig.script || undefined,
+    cost: fig.cost ?? 'medium',
+    preview_url: fig.previewPngBase64
+      ? `data:image/png;base64,${fig.previewPngBase64}`
+      : fig.svg
+        ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(fig.svg)}`
+        : null,
+  }
+  useAssetStore.setState((s) => ({
+    byId: { ...s.byId, [fileId]: info },
+    panels: s.panels.some((p) => p.id === fileId) ? s.panels : [...s.panels, info],
+    figuresDir: fig.project,
+    loaded: true,
+    loading: false,
+    error: null,
+  }))
+  const script = fig.script.trim()
+  if (script) {
+    useScriptLibraryStore.setState((s) => {
+      const view = s.view ?? { source: 'mcp-session', scripts: {}, candidates: [], conflicts: {}, all_scripts: [] }
+      const existing = view.scripts[script]
+      const current = view.all_scripts.find((entry) => entry.script === script)
+      return {
+        view: {
+          ...view,
+          scripts: {
+            ...view.scripts,
+            [script]: {
+              entry: existing?.entry ?? 'main',
+              cost: existing?.cost ?? fig.cost ?? 'medium',
+              notes: existing?.notes ?? '',
+              stems: Array.from(new Set([...(existing?.stems ?? []), fig.stem])),
+            },
+          },
+          all_scripts: [
+            ...view.all_scripts.filter((entry) => entry.script !== script),
+            {
+              script,
+              registered: true,
+              static_stems: Array.from(new Set([...(current?.static_stems ?? []), fig.stem])),
+              entry_candidates: current?.entry_candidates?.length ? current.entry_candidates : ['main'],
+              reason: 'registered',
+              can_probe: false,
+            },
+          ],
+        },
+        loaded: true,
+        loading: false,
+        error: null,
+      }
+    })
+  }
+  return { fileId }
 }
 
 /**

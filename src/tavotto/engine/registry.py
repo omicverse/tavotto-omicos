@@ -29,11 +29,11 @@
 
 from __future__ import annotations
 
-from . import importscope
-
 import json
 import os
 from pathlib import Path
+
+from . import importscope
 
 REGISTRY_NAME = "omicos_registry.json"
 #: 旧版注册表文件名，只用于读取和一次性迁移。

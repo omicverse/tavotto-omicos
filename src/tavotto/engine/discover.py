@@ -25,19 +25,32 @@
 
 from __future__ import annotations
 
-from . import importscope
-
 import argparse
 import ast
 import json
 import re
 from pathlib import Path, PurePosixPath
 
-from . import atomicio, figcapture, registry
+from . import atomicio, figcapture, importscope, registry
 
 #: 「什么算一份图产物」的唯一出处在 `figcapture.ARTIFACT_EXTS`（捕获描述符
 #: 判原件、handoff 找产物、这里的静态扫描必须是同一张表）；旧名保留作镜像。
 OUT_EXTS = figcapture.ARTIFACT_EXTS
+# OmicOS writes a replay target into every managed figure source.  A managed
+# source is a material-specific view of a shared analysis script; static AST
+# discovery of the original script would otherwise report every sibling stem
+# for every copied source and create false multiple-source conflicts.
+MANAGED_SOURCE_MARKER = figcapture.MANAGED_SOURCE_MARKER
+MANAGED_TARGET_RE = re.compile(
+    r"^\s*_omicos_replay_target_stem\s*=\s*(['\"])(?P<stem>[^'\"]+)\1\s*$",
+    re.MULTILINE,
+)
+# Older OmicOS exports copied one managed source per captured image but left the
+# replay target marker empty.  The copied filename is still a stable binding
+# (`asset-<digest>-<artifact stem>.py`) and the matching artifact lives in the
+# same project directory.  Keep this fallback deliberately narrow: it only
+# applies to managed sources and only when an artifact with the inferred stem is
+# actually present, so ordinary scripts continue to use AST discovery.
 # 样式模块及其副本（"paper_style 2.py"）、私有助手、测试与打包脚本。
 # 这两张表只把脚本挡在**自动静态起草**之外（打开项目时的注册表草稿不该混进
 # 测试与工具脚本）；「列给用户挑」的清单（probe.script_inventory）仍然列出
@@ -866,12 +879,29 @@ def _resolve(patterns: set[str], figures_dir: Path) -> tuple[set[str], list[str]
     return stems, unresolved
 
 
+def _managed_filename_target(path: Path, figures_dir: Path) -> str | None:
+    """Infer a managed replay target from its copied filename when necessary.
+
+    OmicOS imported sources are renamed to avoid collisions.  For example,
+    ``sources/asset-a1b2-figure_1.py`` is the source paired with
+    ``figure_1.png`` in the project root.  This is a compatibility fallback for
+    exports whose marker is empty; it never guesses a target that is absent from
+    the project.
+    """
+    return figcapture.managed_fallback_stem(path, figures_dir)
+
+
 def analyze_script(path: Path, figures_dir: Path) -> dict | None:
     """单个脚本 → 报告条目；不是绘图脚本（无入口 / 不存图）返回 None。"""
     try:
         source = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return None
+    managed_target = None
+    if source.startswith(MANAGED_SOURCE_MARKER):
+        match = MANAGED_TARGET_RE.search(source)
+        if match:
+            managed_target = match.group("stem").strip()
     try:
         tree = ast.parse(source)
     except SyntaxError:
@@ -896,6 +926,20 @@ def analyze_script(path: Path, figures_dir: Path) -> dict | None:
     scope = importscope.namespace(rel_key(path, figures_dir))
     scan_root = figures_dir / scope if scope else figures_dir
     stems, unresolved = _resolve(an.patterns, scan_root)
+    if managed_target:
+        # The target is emitted by OmicOS after it has captured the concrete
+        # artifact.  Keep it tied to this copied source even when the source
+        # body contains a shared savefig template that names other figures.
+        stems = [managed_target]
+        unresolved = []
+    elif source.startswith(MANAGED_SOURCE_MARKER):
+        # Compatibility with managed sources produced before Core populated
+        # `_omicos_replay_target_stem`.  The filename/artifact pairing is the
+        # only safe fallback; if it cannot be proven, retain the AST result.
+        inferred = _managed_filename_target(path, figures_dir)
+        if inferred:
+            stems = [inferred]
+            unresolved = []
     return {
         "entry": entry,
         "stems": sorted(stems),
@@ -967,11 +1011,16 @@ def write_config(figures_dir: str | Path, cfg: dict) -> Path:
     return path
 
 
-def merge(figures_dir: str | Path) -> tuple[dict, dict, dict]:
+def merge(figures_dir: str | Path, *, target_python: str | None = None) -> tuple[dict, dict, dict]:
     """草稿并入现有注册表：现有条目原样保留，只追加新脚本与未登记的 stem。
 
     返回 (合并后的配置, 原始报告, 变更摘要)。
+
+    ``target_python`` is accepted for compatibility with older Tavotto runtime
+    callers.  Static discovery is intentionally interpreter independent; the
+    worker is only needed for explicit probe/render operations.
     """
+    del target_python
     draft, rep = build_draft(figures_dir)
     # 读旧名那份也算数（write_config 仍只写新名，合并结果因此自然完成搬迁）。
     path = registry.existing_registry_path(figures_dir)
@@ -1047,8 +1096,11 @@ def register(
     if append:
         claimed |= {str(x) for x in (prev_entry or {}).get("stems", [])}
     for name, entry_cfg in list(scripts.items()):
-        if (name == script or not isinstance(entry_cfg, dict)
-                or importscope.namespace(name) != importscope.namespace(script)):
+        if (
+            name == script
+            or not isinstance(entry_cfg, dict)
+            or importscope.namespace(name) != importscope.namespace(script)
+        ):
             continue
         kept = [s for s in entry_cfg.get("stems", []) if s not in claimed]
         if len(kept) != len(entry_cfg.get("stems", [])):

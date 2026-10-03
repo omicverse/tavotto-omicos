@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import quote
 
+from tavotto import pdfbackend
 from tavotto.engine import (
     artifactcheck as engine_artifactcheck,
     config as engine_config,
@@ -338,6 +339,78 @@ def close_session(session_id: str) -> dict:
         "project": s.project,
         "stem": s.stem,
     }
+
+
+def session_state(session_id: str) -> dict:
+    """Return the current render snapshot without executing the source again.
+
+    Figure Studio uses this when restoring an embedded canvas after the iframe
+    has been recreated.  Keep the snapshot limited to fields that exist in the
+    current session model so restoring a canvas never mutates the project or
+    starts a worker as a side effect.
+    """
+    session = get_session(session_id)
+    if session.manifest is None:
+        raise BridgeError(
+            "会话还没有 manifest（先 apply 一次 override 或重新 open）",
+            code="no_manifest",
+        )
+    out = {
+        "ok": True,
+        "session_id": session.id,
+        "project": session.project,
+        "stem": session.stem,
+        "script": session.script,
+        "entry": session.entry,
+        "profile": engine_profiles.stamp(session.profile),
+        "patches": list(session.patches),
+        "patch_hash": session.patch_hash(),
+        "render_revision": session.rev,
+        "manifest": session.manifest,
+        "svg": session.svg,
+    }
+    if session.preview is not None:
+        out["preview"] = session.preview
+    return out
+
+
+def save_canvas_state(project_path: str, state: dict) -> dict:
+    """Persist the Tavotto Figure 1 composition for the next host open.
+
+    The MCP iframe is intentionally stateless: it may be destroyed when the
+    user returns to Figure Studio's project list.  The canvas document is host
+    composition data, so it is written beside the host project rather than to
+    browser storage or a fake engine session.  The path is checked against the
+    same workspace roots as every other Tavotto file operation.
+    """
+    if not isinstance(state, dict):
+        raise BridgeError("canvas state 必须是对象", code="bad_canvas_state")
+    try:
+        encoded = json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError) as exc:
+        raise BridgeError(
+            f"canvas state 不是可保存的 JSON: {exc}", code="bad_canvas_state"
+        ) from exc
+    if len(encoded.encode("utf-8")) > 16 * 1024 * 1024:
+        raise BridgeError("canvas state 太大，拒绝写入", code="canvas_state_too_large")
+    project = Path(check_scope(project_path))
+    if not project.is_dir():
+        raise BridgeError(f"项目目录不存在: {project}", code="project_missing")
+    target = project / ".tavotto-canvas.json"
+    temporary = project / ".tavotto-canvas.json.tmp"
+    body = {"version": 1, "saved_at": time.time(), "state": state}
+    try:
+        temporary.write_text(
+            json.dumps(body, ensure_ascii=False, separators=(",", ":")), encoding="utf-8"
+        )
+        os.replace(temporary, target)
+    except OSError as exc:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        raise BridgeError(f"无法保存画布: {exc}", code="canvas_state_save_failed") from exc
+    return {"ok": True, "project": str(project), "path": str(target), "saved_at": body["saved_at"]}
 
 
 def _evict_if_needed() -> list[str]:
@@ -1574,6 +1647,70 @@ def _normalized_status(session: Session) -> dict | None:
         "reason": None if current else "state_changed",
         "verified_patch_hash": n.get("patch_hash"),
     }
+
+
+def export_canvas(
+    objects: list[dict],
+    *,
+    page_w_mm: float,
+    page_h_mm: float,
+    formats: list[str],
+    dpi: int = 600,
+    out_dir: str | None = None,
+    stem: str = "Figure_1",
+    transparent: bool = False,
+) -> dict:
+    """Export the live Figure 1 composition through Tavotto's native canvas
+    backend.  This is deliberately a sibling of ``export`` rather than a UI
+    screenshot: panel placement, text, arrows and shapes are resolved by the
+    same ``pdfbackend.compose`` implementation used by Tavotto's desktop
+    canvas exporter, and every format is produced from one page instance.
+    """
+    try:
+        dpi = int(dpi)
+    except (TypeError, ValueError):
+        raise BridgeError(f"dpi 必须是整数: {dpi!r}", code="bad_dpi") from None
+    if dpi <= 0 or dpi > 1200:
+        raise BridgeError(f"dpi 超出范围: {dpi}", code="bad_dpi")
+    fmts = [str(f).lower().strip() for f in formats if str(f).strip()]
+    allowed = {"pdf", "png", "tiff"}
+    bad = [f for f in fmts if f not in allowed]
+    if bad:
+        raise BridgeError("画布导出不支持: " + ", ".join(bad), code="bad_format")
+    if not fmts:
+        fmts = ["pdf", "png"]
+    target = Path(check_scope(out_dir or str(engine_config.project_export_dir(str(stem)))))
+    target.mkdir(parents=True, exist_ok=True)
+    safe_stem = (
+        "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in stem).strip("._") or "Figure_1"
+    )
+    canvas = pdfbackend.compose(float(page_w_mm), float(page_h_mm), bool(transparent))
+    try:
+
+        def resolve(obj: dict, _out_dpi: int) -> Path:
+            raw = obj.get("source_path") or obj.get("id")
+            if not isinstance(raw, str) or not raw:
+                raise BridgeError("画布面板缺少素材路径", code="source_missing")
+            return Path(check_scope(raw))
+
+        for obj in objects:
+            if not isinstance(obj, dict) or obj.get("hidden"):
+                continue
+            canvas.place(obj, dpi, resolve)
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        files = []
+        for fmt in fmts:
+            path = target / f"{safe_stem}_{stamp}.{fmt}"
+            if fmt == "pdf":
+                canvas.save_pdf(path)
+            elif fmt == "png":
+                canvas.save_png(path, dpi)
+            else:
+                canvas.save_tiff(path, dpi)
+            files.append({"format": fmt, "path": str(path), "status": "done"})
+    finally:
+        canvas.close()
+    return {"ok": True, "scope": "canvas", "files": files, "export_dir": str(target), "dpi": dpi}
 
 
 def _normalize_proof_section(

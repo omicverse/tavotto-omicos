@@ -8,6 +8,73 @@
 @import '@sfinterface/numbers/styles.css';
 @import 'tailwindcss' source('../src');
 
+/* Export format controls use the OmicOS switch treatment.  The native checkbox
+   remains the interaction and accessibility surface; the slider is decorative. */
+.tavotto-format-switch {
+  --switch-width: 2em;
+  --switch-height: 1em;
+  position: relative;
+  display: inline-flex;
+  width: var(--switch-width);
+  height: var(--switch-height);
+  flex: 0 0 auto;
+  font-size: 14px;
+}
+.tavotto-format-switch__input {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+}
+.tavotto-format-switch__slider {
+  box-sizing: border-box;
+  position: absolute;
+  inset: 0;
+  cursor: pointer;
+  border: 2px solid var(--color-border-control);
+  border-radius: var(--switch-height);
+  background: var(--color-surface-2);
+  transition: .15s;
+}
+.tavotto-format-switch__slider::before {
+  box-sizing: border-box;
+  position: absolute;
+  content: '';
+  width: var(--switch-height);
+  height: var(--switch-height);
+  left: -2px;
+  bottom: -2px;
+  border: 2px solid var(--color-border-control);
+  border-radius: 100%;
+  background: var(--color-surface);
+  box-shadow: 0 .2em 0 var(--color-border-control);
+  transition: .15s;
+}
+.tavotto-format-switch__input:checked + .tavotto-format-switch__slider {
+  border-color: var(--color-ok);
+  background: var(--color-ok);
+}
+.tavotto-format-switch__input:checked + .tavotto-format-switch__slider::before {
+  border-color: var(--color-ok);
+  transform: translateX(calc(var(--switch-width) - var(--switch-height))) translateY(-.2em);
+  box-shadow: 0 .2em 0 var(--color-ok);
+}
+.tavotto-format-switch__input:focus-visible + .tavotto-format-switch__slider {
+  box-shadow: 0 0 0 2px var(--color-ok-subtle);
+}
+.tavotto-format-switch__input:hover + .tavotto-format-switch__slider::before {
+  transform: translateY(-.3em);
+  box-shadow: 0 .3em 0 var(--color-border-control);
+}
+.tavotto-format-switch__input:hover:checked + .tavotto-format-switch__slider::before {
+  transform: translateX(calc(var(--switch-width) - var(--switch-height))) translateY(-.3em);
+  box-shadow: 0 .3em 0 var(--color-ok);
+}
+.tavotto-format-switch__input:disabled + .tavotto-format-switch__slider {
+  cursor: not-allowed;
+  opacity: .45;
+}
+
 /* ---------------------------------------------------------------------------
    Tavotto — design tokens（Design Constitution 的落地；全文见
    docs/ux/DESIGN_CONSTITUTION.md，这里只放值与一句理由）

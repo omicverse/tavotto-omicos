@@ -180,10 +180,14 @@ def test_tools_list_shape():
         "tavotto_export",
         "tavotto_verify_replay",
         "tavotto_refresh_project",
+        "tavotto_session_state",
         "tavotto_close_session",
+        "tavotto_save_canvas",
     ]
     for t in tools:
         assert t["description"] and t["inputSchema"]["type"] == "object"
+    hidden = next(t for t in tools if t["name"] == "tavotto_save_canvas")
+    assert hidden["_meta"]["ui"]["visibility"] == ["app"]
 
 
 def test_only_canvas_tools_carry_the_ui_resource():
@@ -903,6 +907,12 @@ def test_open_apply_preflight_export_close_without_any_ui(project, fake_pool, tm
     assert applied["applied"] == 1 and applied["rejected"] == []
     # worker 拿到的是**过滤后仍保持原始顺序**的那份，与 Flask 走的完全一样
     assert fake_pool.calls[-1][2] == patches
+
+    snapshot = _body(_call("tavotto_session_state", {"session_id": sid}))
+    assert snapshot["session_id"] == sid
+    assert snapshot["patches"] == patches
+    assert snapshot["render_revision"] == applied["render_revision"]
+    assert snapshot["manifest"] and snapshot["svg"]
 
     checks = _body(_call("tavotto_preflight", {"session_id": sid}))
     assert checks["blocking"] is True  # 7pt 撞绝对下限

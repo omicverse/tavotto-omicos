@@ -133,6 +133,7 @@ import io
 import json
 import os
 import pathlib
+import re
 
 __all__ = [
     "savefig_stem",
@@ -154,6 +155,7 @@ __all__ = [
     "source_fingerprint",
     "size_mm_of",
     "find_original_artifact",
+    "managed_fallback_stem",
 ]
 
 #: 兜底最多补多少张。`for i in range(200): plt.figure()` 是真会出现的写法
@@ -183,11 +185,44 @@ _SOURCES = (SOURCE_SAVEFIG, SOURCE_PYPLOT)
 #: 交接找产物、描述符判「有没有原件」必须是同一张表，否则三处各认一套，
 #: 表现是「discover 说这是图、写回说没有原件」。
 ARTIFACT_EXTS = (".pdf", ".png", ".svg", ".jpg", ".jpeg", ".eps", ".tif", ".tiff")
+MANAGED_SOURCE_MARKER = "# OmicOS managed figure source v1"
+_MANAGED_ASSET_PREFIX_RE = re.compile(r"^asset-[0-9a-f]+-(?P<stem>.+)$", re.IGNORECASE)
 
 #: 捕获描述符的 schema 版本。**捕获语义改变时才升**（stem 取法、去重、
 #: fingerprint 构成……）；它参与 fingerprint，所以升版 = 所有旧 fingerprint
 #: 自然失配 = 「按旧语义捕的图可能已过时」这句 stale hint 如实成立。
 DESCRIPTOR_VERSION = 1
+
+
+def managed_fallback_stem(script: str | os.PathLike, figures_dir: str | os.PathLike) -> str | None:
+    """Infer the primary pyplot fallback stem for a copied managed source.
+
+    Older OmicOS imports copied a source to ``asset-<hash>-<stem>.py`` while
+    leaving its replay target marker empty. The generic pyplot fallback would
+    consequently expose the asset id as the runtime stem, so the registry's
+    real ``<stem>`` could never be opened. Only infer a name for the managed
+    source format, and only when a same-stem artifact is already present in the
+    project; arbitrary user scripts remain unchanged.
+    """
+    path = pathlib.Path(script)
+    try:
+        first = path.read_text(encoding="utf-8").splitlines()[0]
+    except (OSError, UnicodeError, IndexError):
+        return None
+    if first.strip() != MANAGED_SOURCE_MARKER:
+        return None
+    match = _MANAGED_ASSET_PREFIX_RE.match(path.stem)
+    candidates = [match.group("stem").strip()] if match else []
+    if path.stem not in candidates:
+        candidates.append(path.stem)
+    root = pathlib.Path(figures_dir)
+    for candidate in candidates:
+        if not candidate:
+            continue
+        for extension in ARTIFACT_EXTS:
+            if any(p.is_file() and p.stem == candidate for p in root.rglob(f"*{extension}")):
+                return candidate
+    return None
 
 
 def size_mm_of(fig) -> tuple[float, float]:
@@ -277,7 +312,9 @@ def source_fingerprint(
     return "sha256:" + hashlib.sha256(canon.encode("utf-8")).hexdigest()
 
 
-def find_original_artifact(project_root: str, stem: str, *, isfile=os.path.isfile, script: str = "") -> str | None:
+def find_original_artifact(
+    project_root: str, stem: str, *, isfile=os.path.isfile, script: str = ""
+) -> str | None:
     """项目根下 stem 的原始产物（相对路径，POSIX）；没有回 None。
 
     判据与 handoff 交接找产物是同一份（它现在就调这里）：只看项目根一层、

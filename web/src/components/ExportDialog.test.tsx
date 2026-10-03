@@ -550,13 +550,13 @@ describe('确认只对"这一批"问题有效', () => {
 })
 
 describe('统一 ExportRequest', () => {
-  it('格式行保留多选语义，但选中态用圆形黑点明确显示', async () => {
+  it('格式行保留多选语义，并用 OmicOS 开关明确显示选中态', async () => {
     await setup(9)
     const pdf = formatBox('PDF')!
     const label = pdf.closest('label')!
     expect(label.getAttribute('data-format-selected')).toBe('true')
-    expect(pdf.className).toContain('rounded-full')
-    expect(label.querySelector('.peer-checked\\:opacity-100')).toBeTruthy()
+    expect(pdf.className).toContain('tavotto-format-switch__input')
+    expect(label.querySelector('.tavotto-format-switch__slider')).toBeTruthy()
     await click(pdf)
     expect(label.getAttribute('data-format-selected')).toBe('false')
   })

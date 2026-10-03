@@ -6,7 +6,7 @@ This work is a **modified version** of Tavotto.
   (upstream release 0.15.0).
 - **Modified by:** OmicOS (OmicVerse).
 - **Date of these modifications:** 2026-09-27 (published), developed 2026-09.
-- **Runtime version string:** `0.15.0+omicos.5` (PEP 440 local version; it is not an
+- **Runtime version string:** `0.15.1` (strict SemVer for Codex plugin validation; it is not an
   upstream release).
 - **Licence:** unchanged, AGPL-3.0-only.
 

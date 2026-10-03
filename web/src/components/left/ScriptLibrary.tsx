@@ -57,6 +57,7 @@ export function ScriptLibrary({ query }: { query: string }) {
   }, [loaded])
 
   const q = query.trim().toLowerCase()
+  const mcpSession = view?.source === 'mcp-session'
   const scripts = (view?.all_scripts ?? []).filter(
     (s) => !q || s.script.toLowerCase().includes(q),
   )
@@ -105,7 +106,12 @@ export function ScriptLibrary({ query }: { query: string }) {
             </h4>
             <ul aria-label={label}>
               {groups.get(g)!.map((entry) => (
-                <ScriptRow key={entry.script} entry={entry} stems={view.scripts[entry.script]?.stems ?? []} />
+                <ScriptRow
+                  key={entry.script}
+                  entry={entry}
+                  stems={view.scripts[entry.script]?.stems ?? []}
+                  mcpSession={mcpSession}
+                />
               ))}
             </ul>
           </section>
@@ -132,7 +138,16 @@ export function ScriptLibrary({ query }: { query: string }) {
  * 的操作，不该比文件名更响。状态那一段 aria-live=polite——只在相位变化时更新
  * 一次，不高频播报。
  */
-function ScriptRow({ entry, stems }: { entry: ScriptInventoryEntry; stems: string[] }) {
+function ScriptRow({
+  entry,
+  stems,
+  mcpSession = false,
+}: {
+  entry: ScriptInventoryEntry
+  stems: string[]
+  /** MCP iframe has no HTTP probe endpoint; its source is already hydrated by the host. */
+  mcpSession?: boolean
+}) {
   useTranslation('workspace')
   const run = useScriptRunStore((s) => s.byScript[entry.script])
   const busy = !!run && isBusyPhase(run.phase)
@@ -156,21 +171,29 @@ function ScriptRow({ entry, stems }: { entry: ScriptInventoryEntry; stems: strin
         >
           {entry.script}
         </span>
-        <StatusLine entry={entry} stems={stems} run={run} onViewResults={() => setResultsOpen(true)} />
-        <IconButton
-          iconSize="sm"
-          label={
-            busy
-              ? sc('cancelAria', { script: entry.script })
-              : sc(entry.registered ? 'rerunAria' : 'runAria', { script: entry.script })
-          }
-          tip={busy ? sc(run?.cancelRequested ? 'cancelling' : 'cancel') : sc(entry.registered ? 'rerun' : 'run')}
-          disabled={!!run?.cancelRequested}
-          onClick={onRunOrCancel}
-          className={cn(!busy && 'text-ink-3 group-hover:text-ink focus-visible:text-ink')}
-        >
-          {busy ? <Square size={ICON_SIZE.sm} /> : <Play size={ICON_SIZE.sm} />}
-        </IconButton>
+        <StatusLine
+          entry={entry}
+          stems={stems}
+          run={run}
+          mcpSession={mcpSession}
+          onViewResults={() => setResultsOpen(true)}
+        />
+        {!mcpSession && (
+          <IconButton
+            iconSize="sm"
+            label={
+              busy
+                ? sc('cancelAria', { script: entry.script })
+                : sc(entry.registered ? 'rerunAria' : 'runAria', { script: entry.script })
+            }
+            tip={busy ? sc(run?.cancelRequested ? 'cancelling' : 'cancel') : sc(entry.registered ? 'rerun' : 'run')}
+            disabled={!!run?.cancelRequested}
+            onClick={onRunOrCancel}
+            className={cn(!busy && 'text-ink-3 group-hover:text-ink focus-visible:text-ink')}
+          >
+            {busy ? <Square size={ICON_SIZE.sm} /> : <Play size={ICON_SIZE.sm} />}
+          </IconButton>
+        )}
       </div>
 
       <FailureRecovery script={entry.script} run={run} />
@@ -222,11 +245,13 @@ function StatusLine({
   entry,
   stems,
   run,
+  mcpSession,
   onViewResults,
 }: {
   entry: ScriptInventoryEntry
   stems: string[]
   run: ScriptRunState | undefined
+  mcpSession: boolean
   onViewResults: () => void
 }) {
   useTranslation('workspace')
@@ -234,7 +259,12 @@ function StatusLine({
 
   let body: React.ReactNode = null
   let title: string | undefined
-  if (phase === 'starting_runtime' || phase === 'running') {
+  if (mcpSession) {
+    // MCP scripts are already associated with host-provided managed sources.
+    // There is no HTTP probe endpoint inside the iframe, so do not expose a
+    // button that would always fail with "Failed to fetch".
+    body = sc('linkedCount', { count: stems.length })
+  } else if (phase === 'starting_runtime' || phase === 'running') {
     body = sc(phase === 'running' ? 'running' : 'starting')
   } else if (phase === 'captured_one' || phase === 'captured_many') {
     body = (

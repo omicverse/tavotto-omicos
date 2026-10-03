@@ -303,6 +303,15 @@ def _tools() -> list[dict]:
                 "type": "object",
                 "properties": {
                     "session_id": {"type": "string"},
+                    "scope": {
+                        "type": "string",
+                        "enum": ["original", "canvas"],
+                        "description": "导出原图会话或当前 Tavotto 画布",
+                    },
+                    "page_w_mm": {"type": "number"},
+                    "page_h_mm": {"type": "number"},
+                    "objects": {"type": "array", "items": {"type": "object"}},
+                    "transparent": {"type": "boolean"},
                     "formats": {
                         "type": "array",
                         "items": {"type": "string", "enum": list(bridge.EXPORT_FORMATS)},
@@ -321,7 +330,7 @@ def _tools() -> list[dict]:
                     },
                     "proof": {"type": "boolean", "description": "写 proof report，默认 true"},
                 },
-                "required": ["session_id"],
+                "required": [],
                 "additionalProperties": False,
             },
         },
@@ -377,6 +386,17 @@ def _tools() -> list[dict]:
             },
         },
         {
+            "name": "tavotto_session_state",
+            "title": "会话当前快照",
+            "description": "取回已打开会话当前的 manifest、SVG、patches 和渲染版本；不重新渲染。画布在打开或恢复时使用。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"session_id": {"type": "string"}},
+                "required": ["session_id"],
+                "additionalProperties": False,
+            },
+        },
+        {
             "name": "tavotto_close_session",
             "title": "关闭会话",
             "description": "释放引擎会话。用户的项目数据一个字节都不动。",
@@ -386,6 +406,24 @@ def _tools() -> list[dict]:
                 "required": ["session_id"],
                 "additionalProperties": False,
             },
+        },
+        {
+            # Host-only MCP App persistence. It is intentionally omitted from
+            # the Figure Studio user-facing tool matrix, but must be listed so
+            # the host MCP manager can dispatch the embedded canvas save call.
+            "name": "tavotto_save_canvas",
+            "title": "保存画布快照",
+            "description": "保存宿主 Figure Studio 画布的可恢复快照；仅供嵌入式 App 使用。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project_path": {"type": "string"},
+                    "state": {"type": "object"},
+                },
+                "required": ["project_path", "state"],
+                "additionalProperties": False,
+            },
+            "_meta": {"ui": {"visibility": ["app"]}},
         },
     ]
     if ui:
@@ -678,6 +716,19 @@ def _call_export(args: dict) -> dict:
     # dpi **不能写成 `or 600`**：显式给的 0 是写错了，不是「没给」，
     # 悄悄替它换成 600 会让用户以为自己的参数生效了
     raw_dpi = args.get("dpi")
+    if args.get("scope") == "canvas":
+        out = bridge.export_canvas(
+            args.get("objects") or [],
+            page_w_mm=args.get("page_w_mm") or 150,
+            page_h_mm=args.get("page_h_mm") or 100,
+            formats=args.get("formats") or [],
+            dpi=600 if raw_dpi is None else raw_dpi,
+            stem=args.get("stem") or "Figure_1",
+            out_dir=args.get("out_dir"),
+            transparent=bool(args.get("transparent")),
+        )
+        paths = [f["path"] for f in out.get("files", []) if f.get("status") == "done"]
+        return {"content": _text("已导出：" + "、".join(paths)), "structuredContent": out}
     out = bridge.export(
         str(args.get("session_id") or ""),
         formats=args.get("formats") or [],
@@ -923,6 +974,24 @@ def _call_close(args: dict) -> dict:
     }
 
 
+def _call_session_state(args: dict) -> dict:
+    out = bridge.session_state(str(args.get("session_id") or ""))
+    return {
+        "content": _text(
+            f"会话 {out['session_id']} 当前快照：{len(out['patches'])} 条 patch"
+        ),
+        "structuredContent": out,
+    }
+
+
+def _call_save_canvas(args: dict) -> dict:
+    out = bridge.save_canvas_state(
+        str(args.get("project_path") or ""),
+        args.get("state") if isinstance(args.get("state"), dict) else {},
+    )
+    return {"content": _text(f"画布已保存：{out['path']}"), "structuredContent": out}
+
+
 def _call_health(args: dict) -> dict:
     """能力自检：引擎 / 画布 / 项目根，一次说清。**先体检再出图**（便宜）。"""
     import time as _time
@@ -973,6 +1042,8 @@ HANDLERS = {
     "tavotto_export": _call_export,
     "tavotto_verify_replay": _call_verify,
     "tavotto_refresh_project": _call_refresh,
+    "tavotto_session_state": _call_session_state,
+    "tavotto_save_canvas": _call_save_canvas,
     "tavotto_close_session": _call_close,
 }
 
@@ -1268,7 +1339,11 @@ class Server:
         return {
             "protocolVersion": version,
             "capabilities": caps,
-            "serverInfo": {"name": SERVER_NAME, "title": "OmicOS Figure Studio", "version": _version()},
+            "serverInfo": {
+                "name": SERVER_NAME,
+                "title": "OmicOS Figure Studio",
+                "version": _version(),
+            },
             "instructions": (
                 "Tavotto 负责结构化图表编辑：改的是 override（gid + prop + value），"
                 "**不会动用户的 Python 源码**。流程：tavotto_open_figure 打开 → "

@@ -21,7 +21,7 @@ import { renderKey, useRenderStore } from '@/store/renderStore'
 import { useUiStore } from '@/store/uiStore'
 import type { PanelObject } from '@/types/document'
 import type { AppsBridge, ToolCallResult } from './appsBridge'
-import { installMcpTransport, seedSession, unwrap, type OpenFigureResult } from './session'
+import { appendImportedMaterial, appendSession, installMcpTransport, seedBlankSession, seedSession, unwrap, type OpenFigureResult } from './session'
 
 const manifest = (tickPt = 9): Manifest =>
   ({
@@ -93,6 +93,44 @@ beforeEach(() => {
 })
 
 describe('seedSession', () => {
+  it('为新建项目使用 Tavotto 原生空文档并保留导入素材清单', async () => {
+    await seedBlankSession({
+      blank: true,
+      ok: true,
+      project: '/tmp/figure-studio',
+      stem: 'Untitled figure',
+      assets: [
+        { id: 'asset-1', name: 'plot.png', mime: 'image/png', previewDataUrl: null },
+        { id: 'asset-2', name: 'plot.csv', mime: 'text/csv', previewDataUrl: null },
+        { id: 'asset-3', name: 'plot.figmeta.json', mime: 'application/json', previewDataUrl: null },
+      ],
+    } as unknown as OpenFigureResult)
+
+    expect(useDocumentStore.getState().doc.objects).toHaveLength(0)
+    expect([useDocumentStore.getState().doc.page.w, useDocumentStore.getState().doc.page.h]).toEqual([150, 100])
+    expect(useAssetStore.getState().panels.map((panel) => panel.name)).toEqual(['plot.png'])
+    expect(useAssetStore.getState().panels[0].preview_url).toBeNull()
+    expect(useUiStore.getState().leftTab).toBe('assets')
+  })
+
+  it('实时导入时同样隐藏 CSV/JSON 伴随文件', async () => {
+    await seedBlankSession({
+      blank: true,
+      ok: true,
+      project: '/tmp/figure-studio',
+      stem: 'Untitled figure',
+      assets: [],
+    } as unknown as OpenFigureResult)
+    const bridge = fakeBridge(() => okResult({}))
+    await appendImportedMaterial(bridge, '/tmp/figure-studio', {
+      id: 'asset-json', name: 'plot.json', mime: 'application/json',
+    })
+    await appendImportedMaterial(bridge, '/tmp/figure-studio', {
+      id: 'asset-png', name: 'plot.png', mime: 'image/png',
+    })
+    expect(useAssetStore.getState().panels.map((panel) => panel.name)).toEqual(['plot.png'])
+  })
+
   it('把工具响应灌进既有 stores，而不是另建一套画布状态', () => {
     const open = openResult()
     const { panelId, fileId } = seedSession(open)
@@ -137,6 +175,23 @@ describe('seedSession', () => {
 })
 
 describe('MCP 传输', () => {
+  it('批量打开的完整会话追加到同一份素材、图层和渲染 stores', () => {
+    seedSession(openResult())
+    const second = {
+      ...openResult(),
+      session_id: 's-def',
+      stem: 'FigN',
+      manifest: { ...manifest(), stem: 'FigN', size_mm: [40, 30] as [number, number] },
+    }
+    const { fileId, panelId } = appendSession(second)
+    const doc = useDocumentStore.getState().doc
+    expect(doc.objects).toHaveLength(2)
+    expect((doc.objects[1] as PanelObject).id).toBe(panelId)
+    expect((doc.objects[1] as PanelObject).fileId).toBe(fileId)
+    expect(useAssetStore.getState().panels.map((p) => p.id)).toEqual(['FigM.pdf', 'FigN.pdf'])
+    expect(useRenderStore.getState().latest[fileId]).toBe(renderKey(fileId, []))
+  })
+
   it('拖动 → setOverride → 走 tools/call 发全量 patches，manifest 用响应更新', async () => {
     const open = openResult()
     const { panelId, fileId } = seedSession(open)

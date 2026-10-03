@@ -6,7 +6,15 @@ import { normalizeLocale } from '@/i18n/locale'
 import { AppsBridge, hostFallback } from './appsBridge'
 import { McpApp } from './McpApp'
 import { McpProviders } from './McpProviders'
-import { installMcpTransport, seedSession, type OpenFigureResult } from './session'
+import {
+  appendSession,
+  appendImportedMaterial,
+  installMcpTransport,
+  seedBlankSession,
+  seedSession,
+  type OpenFigureResult,
+  unwrap,
+} from './session'
 import '@/index.css'
 import '@/omicos-theme.css'
 
@@ -31,6 +39,36 @@ const bridge = new AppsBridge()
 // 会打到一个不存在的 /api（iframe 里没有 Tavotto 服务）
 installMcpTransport(bridge)
 
+/** Hydrate sibling registered figures into the same real composition. */
+async function hydrateSiblingSessions(open: OpenFigureResult): Promise<void> {
+  const stems = Array.from(
+    new Set((open.registry?.stems ?? []).filter((stem) => stem && stem !== open.stem)),
+  ).slice(0, 7)
+  if (!stems.length) return
+  try {
+    const batch = unwrap(await bridge.callTool('tavotto_open_figure', {
+      project_path: open.project,
+      stems,
+    }))
+    const opened = Array.isArray(batch.opened) ? batch.opened : []
+    for (const entry of opened) {
+      const sessionId =
+        entry && typeof entry === 'object' && typeof (entry as { session_id?: unknown }).session_id === 'string'
+          ? (entry as { session_id: string }).session_id
+          : null
+      if (!sessionId) continue
+      try {
+        const sibling = unwrap(await bridge.callTool('tavotto_session_state', { session_id: sessionId }))
+        if (isOpenResult(sibling)) appendSession(sibling)
+      } catch (error) {
+        console.warn('[tavotto] sibling session state unavailable', error)
+      }
+    }
+  } catch (error) {
+    console.warn('[tavotto] sibling figure hydration unavailable', error)
+  }
+}
+
 /**
  * 只接受**完整的** open 结果。
  *
@@ -44,6 +82,9 @@ installMcpTransport(bridge)
 function isOpenResult(v: unknown): v is OpenFigureResult {
   const o = v as OpenFigureResult | null
   if (!o || typeof o !== 'object') return false
+  if (o.blank === true) {
+    return typeof o.project === 'string' && typeof o.stem === 'string'
+  }
   return (
     typeof o.session_id === 'string' &&
     !!o.manifest &&
@@ -62,13 +103,16 @@ function Boot() {
 
   useEffect(() => {
     let done = false
-    const accept = (payload: unknown) => {
+    const accept = async (payload: unknown) => {
       if (done || !isOpenResult(payload)) return
       done = true
-      const { panelId: pid } = seedSession(payload)
+      const { panelId: pid } = payload.blank
+        ? await seedBlankSession(payload)
+        : seedSession(payload)
       setOpen(payload)
       setPanelId(pid)
       setState('ready')
+      if (!payload.blank) void hydrateSiblingSessions(payload)
     }
 
     // 画布跟随 **Codex host** 的界面语言（issue #30）：iframe 自己探测到的
@@ -102,7 +146,15 @@ function Boot() {
         result?: { structuredContent?: unknown; _meta?: Record<string, unknown> }
       }
       const result = envelope?.result ?? envelope
-      accept(result?.structuredContent ?? (result?._meta?.widgetData as unknown))
+      const payload = result?.structuredContent ?? (result?._meta?.widgetData as unknown)
+      const marker = payload && typeof payload === 'object'
+        ? (payload as { _omicosFigureStudioRefresh?: { project?: unknown; imported?: unknown } })._omicosFigureStudioRefresh
+        : undefined
+      if (marker && typeof marker.project === 'string' && marker.imported && typeof marker.imported === 'object') {
+        void appendImportedMaterial(bridge, marker.project, marker.imported as Parameters<typeof appendImportedMaterial>[2])
+        return
+      }
+      accept(payload)
     })
 
     void bridge.connect({ name: 'tavotto-canvas', version: '1' }).then((ok) => {
@@ -126,7 +178,7 @@ function Boot() {
     }
   }, [])
 
-  if (state === 'ready' && open && panelId) {
+  if (state === 'ready' && open) {
     return <McpApp bridge={bridge} open={open} panelId={panelId} />
   }
   // 走到这里 state 必然不是 ready（上面那个分支已经处理掉了），

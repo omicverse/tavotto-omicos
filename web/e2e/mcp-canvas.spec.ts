@@ -144,7 +144,7 @@ window.addEventListener('message', (ev) => {
       protocolVersion: msg.params.protocolVersion,
       hostInfo: { name: 'fake-codex', version: '0' },
       hostCapabilities: {},
-      hostContext: { displayMode: 'fullscreen',
+      hostContext: { displayMode: 'fullscreen', sessionId: 'host-e2e',
                      availableDisplayModes: ['inline', 'fullscreen'] },
     }})
     return
@@ -170,6 +170,7 @@ window.addEventListener('message', (ev) => {
 interface ToolCall {
   name: string
   arguments: Record<string, unknown>
+  sessionId?: string
 }
 
 async function boot(page: Page): Promise<FrameLocator> {
@@ -296,6 +297,7 @@ test('用鼠标拖图内标题 → tools/call 发全量 patches → 用响应更
 
   const applied = (await calls(page)).find((c) => c.name === 'tavotto_apply_overrides')!
   expect(applied.arguments.session_id).toBe('s-e2e')
+  expect(applied.sessionId).toBe('host-e2e')
   const patches = applied.arguments.patches as { gid: string; prop: string; value: unknown }[]
   // **全量列表**，而且拖出来的正是那条 figure 锚定的位置 override
   expect(Array.isArray(patches)).toBe(true)
@@ -327,6 +329,7 @@ test('预检与导出都走 tools/call，结果回到界面上', async ({ page }
   expect(list.map((c) => c.name)).toContain('tavotto_preflight')
   const exp = list.find((c) => c.name === 'tavotto_export')!
   expect(exp.arguments.session_id).toBe('s-e2e')
+  expect(exp.sessionId).toBe('host-e2e')
   // 没有阻断项时不该带强制标记
   expect(exp.arguments.explicit_confirm).toBe(false)
 })

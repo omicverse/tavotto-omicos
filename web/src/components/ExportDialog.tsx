@@ -2052,9 +2052,8 @@ function OutputRow({ out, dir }: { out: ExportOutput; dir: string }) {
 }
 
 /**
- * 一种输出格式：可多选，但用圆形点表示选中状态，避免用户把行的浅色底当成
- * 唯一选中反馈。底层仍是原生 checkbox（PDF + PNG 可以同时选），圆点只是
- * 这个紧凑格式行的视觉指示器。
+ * 一种输出格式：可多选，用 OmicOS 风格的开关表示选中状态。底层仍是原生
+ * checkbox（PDF + PNG 可以同时选），所以键盘、屏幕阅读器和禁用语义保持不变。
  */
 /**
  * 对话框里唯一的一种行（2026-09-15 打磨批次 D）：标签列 80px 在左、控件在右、行高 28。
@@ -2087,7 +2086,7 @@ function FormatCheck({
         disabled ? "cursor-not-allowed text-ink-faint" : "text-ink",
       )}
     >
-      <span className="relative inline-flex h-4 w-4 shrink-0">
+      <span className="tavotto-format-switch">
         <input
           type="checkbox"
           checked={checked}
@@ -2095,17 +2094,9 @@ function FormatCheck({
           disabled={disabled}
           aria-describedby={describedBy}
           data-format-checkbox={title.toLowerCase()}
-          className={cn(
-            "peer absolute inset-0 m-0 h-full w-full appearance-none rounded-full",
-            "border border-border-control bg-surface outline-none transition-colors duration-fast",
-            "hover:border-ink-2 checked:border-ink",
-            "focus-visible:focus-ring disabled:cursor-not-allowed disabled:opacity-40",
-          )}
+          className="tavotto-format-switch__input"
         />
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-0 m-auto h-1.5 w-1.5 rounded-full bg-ink opacity-0 transition-opacity duration-fast peer-checked:opacity-100"
-        />
+        <span className="tavotto-format-switch__slider" aria-hidden="true" />
       </span>
       <span>{title}</span>
     </label>

@@ -1,4 +1,5 @@
 """Identity of an asset or script in an OmicOS import batch (stdlib only)."""
+
 from pathlib import Path, PurePosixPath
 
 
@@ -24,7 +25,7 @@ def local_claim(script: str, stem: str) -> str:
     if claimed_scope:
         if claimed_scope != scope:
             raise RuntimeError("An imported figure cannot be assigned to another source batch")
-        stem = stem[len(scope) + 1:]
+        stem = stem[len(scope) + 1 :]
     if scope and ("/" in stem or "\\" in stem or stem in (".", "..")):
         raise RuntimeError("Imported figure stems must be local output names")
     return stem

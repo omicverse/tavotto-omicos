@@ -41,8 +41,6 @@
 
 from __future__ import annotations
 
-from . import importscope
-
 import copy
 import hashlib
 import json
@@ -50,7 +48,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import discover, project_refresh, registry
+from . import discover, importscope, project_refresh, registry
 
 # ---------------------------------------------------------------------------
 # 状态与 reason code —— **闭集**，前端按 code 查自己的文案
@@ -427,9 +425,10 @@ def _is_explicit_import(asset: Path, script: Path) -> bool:
     if not isinstance(source, dict):
         return False
     declared_name = source.get("name")
-    return isinstance(declared_name, str) and Path(
-        declared_name.replace("\\", "/")
-    ).name.lower() == asset.name.lower()
+    return (
+        isinstance(declared_name, str)
+        and Path(declared_name.replace("\\", "/")).name.lower() == asset.name.lower()
+    )
 
 
 def _recovered_source_entries(root: Path, assets: list[tuple[str, str]], entries: dict[str, dict]):
@@ -446,39 +445,45 @@ def _recovered_source_entries(root: Path, assets: list[tuple[str, str]], entries
     effective = dict(entries)
     for rel, _kind in assets:
         asset = root / rel
-        script = asset.with_suffix('.py')
+        script = asset.with_suffix(".py")
         if not script.is_file():
             continue
-        metadata = asset.with_suffix('.figmeta.json')
+        metadata = asset.with_suffix(".figmeta.json")
         payload = None
         if metadata.is_file():
             try:
-                payload = json.loads(metadata.read_text(encoding='utf-8'))
+                payload = json.loads(metadata.read_text(encoding="utf-8"))
             except (OSError, ValueError, TypeError):
                 continue
-        recovery = payload.get('recovery') if isinstance(payload, dict) else None
+        recovery = payload.get("recovery") if isinstance(payload, dict) else None
         kernel_history = (
             isinstance(payload, dict)
-            and isinstance(payload.get('extra'), dict)
-            and payload['extra'].get('source_kind') == 'kernel_history'
+            and isinstance(payload.get("extra"), dict)
+            and payload["extra"].get("source_kind") == "kernel_history"
         )
         if kernel_history:
-            declared = payload.get('code_path') or payload.get('extra', {}).get('source_script')
-            if not isinstance(declared, str) or not declared.lower().endswith('.py'):
+            declared = payload.get("code_path") or payload.get("extra", {}).get("source_script")
+            if not isinstance(declared, str) or not declared.lower().endswith(".py"):
                 continue
         imported = _is_explicit_import(asset, script)
-        if not kernel_history and (
-            not isinstance(recovery, dict) or recovery.get('conversation_source') is not True
-        ) and not imported:
+        if (
+            not kernel_history
+            and (not isinstance(recovery, dict) or recovery.get("conversation_source") is not True)
+            and not imported
+        ):
             continue
-        recorded = str(payload.get('figure') or '').replace('\\', '/').lower() if isinstance(payload, dict) else ''
-        relative = str(rel).replace('\\', '/').lower()
+        recorded = (
+            str(payload.get("figure") or "").replace("\\", "/").lower()
+            if isinstance(payload, dict)
+            else ""
+        )
+        relative = str(rel).replace("\\", "/").lower()
         if recorded and recorded not in {relative, Path(relative).name}:
             continue
         script_rel = script.relative_to(root).as_posix()
         stem = importscope.key(rel)
         aliases.setdefault(stem, script_rel)
-        effective.setdefault(script_rel, {'entry': '__main__', 'cost': 'medium', 'stems': [stem]})
+        effective.setdefault(script_rel, {"entry": "__main__", "cost": "medium", "stems": [stem]})
     return aliases, effective
 
 
@@ -533,7 +538,11 @@ def compute(ctx) -> dict:
             if report is None
             else sorted(s for s, info in report["scripts"].items() if info["dynamic_names"])
         )
-        owner = {importscope.key(script, stem): script for script, cfg in entries.items() for stem in cfg["stems"]}
+        owner = {
+            importscope.key(script, stem): script
+            for script, cfg in entries.items()
+            for stem in cfg["stems"]
+        }
         for stem, script in recovery_aliases.items():
             owner.setdefault(stem, script)
         blocked = _blocked_reason(registry_valid, writable, write_failed)
@@ -551,7 +560,9 @@ def compute(ctx) -> dict:
                     owner=owner,
                     scripts=effective_entries,
                     claims=claims,
-                    dynamic=[s for s in dynamic if importscope.namespace(s) == importscope.namespace(rel)],
+                    dynamic=[
+                        s for s in dynamic if importscope.namespace(s) == importscope.namespace(rel)
+                    ],
                     root=root,
                     writable=writable,
                     blocked=blocked,

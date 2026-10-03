@@ -30,6 +30,12 @@
     },
     {
       "from": "tavotto/engine/bridge_runner.py",
+      "to": "tavotto/engine/importscope.py",
+      "scope": "module",
+      "via": "bridgeboot.load_engine_modules(_HERE, _PHASE1)"
+    },
+    {
+      "from": "tavotto/engine/bridge_runner.py",
       "to": "tavotto/engine/patchspec.py",
       "scope": "module",
       "via": "bridgeboot.load_engine_modules(_HERE, _PHASE1)"

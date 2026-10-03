@@ -81,6 +81,7 @@ PRIVATE_PKG = "tavotto_bridge_runtime"
 #: 所以它们**只在捕获之后**才装（见 `bridge_runner` 的两阶段装载）。
 ENGINE_SIBLINGS = (
     "figcapture",
+    "importscope",
     "patchspec",
     "pathgeom",
     "axestraversal",

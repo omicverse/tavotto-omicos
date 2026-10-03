@@ -13,7 +13,7 @@ this repository at the bottom of the canvas editor.
 | | |
 | --- | --- |
 | Base | `Tavotto/Tavotto` @ [`eb14049`](https://github.com/Tavotto/Tavotto/tree/eb1404942ad60a776403fd4a9d3c85459bc5a8b0) (upstream 0.15.0) |
-| This runtime | `0.15.0+omicos.5` |
+| This runtime | `0.15.1` |
 | Licence | AGPL-3.0-only — unchanged from upstream (`LICENSE`) |
 | Modifications | see [`MODIFICATIONS.md`](MODIFICATIONS.md); the diff is this repository's own history on top of the base commit |
 | Building | see [`BUILD.md`](BUILD.md) |
@@ -38,6 +38,6 @@ this repository at the bottom of the canvas editor.
 **AGPL-3.0-only** 许可发布。任何与该工作台交互的人都可以据此取得、研究、修改和再分发
 它的源码（AGPL-3.0 第 5、13 条）。OmicOS 的画布编辑器页面底部给出本仓库链接。
 
-上游基线 `eb14049`（0.15.0），本运行时版本 `0.15.0+omicos.5`；改动清单见
+上游基线 `eb14049`（0.15.0），本运行时版本 `0.15.1`；改动清单见
 `MODIFICATIONS.md`，构建方法见 `BUILD.md`。上游的品牌标识已从本树移除——AGPL 授予的是
 著作权许可，不包含商标权。

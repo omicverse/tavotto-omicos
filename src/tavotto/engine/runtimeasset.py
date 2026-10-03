@@ -400,9 +400,9 @@ def list_assets(project_root: str | Path, registry, *, worker_python: object = N
                 continue  # 坏条目不该炸掉整张清单
             meta = load_metadata(project_root, asset_id)
             desc = (meta or {}).get("descriptor") or None
-            if figcapture.find_original_artifact(root, stem, script=script) is not None and not is_pyplot_capture(
-                desc
-            ):
+            if figcapture.find_original_artifact(
+                root, stem, script=script
+            ) is not None and not is_pyplot_capture(desc):
                 continue  # 磁盘有原件 → FileAsset 的地盘
             size = desc.get("size_mm") if isinstance(desc, dict) else None
             out.append(

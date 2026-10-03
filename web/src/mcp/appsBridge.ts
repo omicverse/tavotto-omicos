@@ -172,7 +172,18 @@ export class AppsBridge {
     timeoutMs?: number,
     signal?: AbortSignal,
   ): Promise<ToolCallResult> {
-    return this.request<ToolCallResult>('tools/call', { name, arguments: args }, timeoutMs, signal)
+    // OmicOS binds every privileged App request to the nonce it returns in
+    // hostContext.sessionId.  Keep the application arguments untouched and
+    // carry that capability at the JSON-RPC params level; the host bridge
+    // accepts this standard sessionId field before forwarding the call.
+    const sessionId =
+      typeof this.hostContext?.sessionId === 'string' ? this.hostContext.sessionId : undefined
+    return this.request<ToolCallResult>(
+      'tools/call',
+      { name, arguments: args, ...(sessionId ? { sessionId } : {}) },
+      timeoutMs,
+      signal,
+    )
   }
 
   /** 请求全屏：复杂编辑画布的主要形态（inline 那点高度放不下一张图 + 属性页）。 */

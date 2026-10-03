@@ -28,12 +28,10 @@ spawn 路径都是 `execspec.safe_spec()` 的消费者）：cwd 在沙盒、argv
 
 from __future__ import annotations
 
-from . import importscope
-
 import logging
 from pathlib import Path
 
-from . import discover, pool, registry
+from . import discover, importscope, pool, registry
 
 LOG = logging.getLogger("tavotto.probe")
 

@@ -373,30 +373,26 @@ def _ov_violin_labels(ax) -> dict[int, str]:
         and len(getattr(c, "get_paths", lambda: ())()) == 1
     ]
     points = [
-        c
-        for c in getattr(ax, "collections", [])
-        if isinstance(c, PathCollection) and hidden(c)
+        c for c in getattr(ax, "collections", []) if isinstance(c, PathCollection) and hidden(c)
     ]
     if len(bodies) != len(groups) or len(points) != len(groups):
         return {}
 
     out: dict[int, str] = {}
     for i, (_position, label) in enumerate(groups):
-        out[id(bodies[i])] = f'小提琴体 “{label}”'
-        out[id(points[i])] = f'样本点 “{label}”'
+        out[id(bodies[i])] = f"小提琴体 “{label}”"
+        out[id(points[i])] = f"样本点 “{label}”"
 
     # The optional box overlay is a pair of ordinary Rectangles.  Keep this
     # tied to the same strict profile so bar charts are never renamed.
-    rectangles = [
-        p for p in getattr(ax, "patches", []) if type(p).__name__ == "Rectangle"
-    ]
+    rectangles = [p for p in getattr(ax, "patches", []) if type(p).__name__ == "Rectangle"]
     if len(rectangles) == len(groups):
         for patch in rectangles:
             xs = _artist_x_values(patch)
             if not xs:
                 continue
             group_i = min(range(len(groups)), key=lambda i: abs(xs[0] - groups[i][0]))
-            out[id(patch)] = f'箱体 “{groups[group_i][1]}”'
+            out[id(patch)] = f"箱体 “{groups[group_i][1]}”"
 
     lines = [line for line in getattr(ax, "lines", []) if isinstance(line, Line2D)]
     span = abs(groups[-1][0] - groups[0][0])
@@ -432,17 +428,17 @@ def _ov_violin_labels(ax) -> dict[int, str]:
             xs, ys = _artist_x_values(line), _artist_y_values(line)
             if len(xs) >= 2 and len(ys) >= 2 and max(ys) - min(ys) <= 1e-9:
                 median_y = ys[0]
-                out[id(line)] = f'中位线 “{group_label}”'
+                out[id(line)] = f"中位线 “{group_label}”"
                 break
         for line in group_lines:
             if id(line) in out:
                 continue
             xs, ys = _artist_x_values(line), _artist_y_values(line)
             if len(xs) >= 4 and abs(xs[0] - xs[-1]) <= 1e-9:
-                out[id(line)] = f'箱线框 “{group_label}”'
+                out[id(line)] = f"箱线框 “{group_label}”"
             elif len(xs) == 2 and abs(xs[0] - xs[1]) <= 1e-9 and median_y is not None:
                 name = "下须" if max(ys) <= median_y else "上须"
-                out[id(line)] = f'{name} “{group_label}”'
+                out[id(line)] = f"{name} “{group_label}”"
     return out
 
 

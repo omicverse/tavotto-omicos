@@ -71,6 +71,36 @@ export function figureErrorCopy(code: FigureErrorCode, locale: string) {
     warning:zh?'诊断可能包含路径或敏感信息，请检查后再分享。':'Diagnostics may contain paths or sensitive information. Review before sharing.' }
 }
 
+/** Copy from an MCP App iframe even when async Clipboard API is unavailable.
+ * WebView2 and sandboxed srcdoc frames can reject navigator.clipboard while
+ * still allowing the user-gesture-bound legacy copy command. */
+function copyWithDocumentCommand(text: string): boolean {
+  if (typeof document.execCommand !== 'function') return false
+  const area = document.createElement('textarea')
+  area.value = text
+  area.setAttribute('readonly', '')
+  area.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;'
+  document.body.appendChild(area)
+  area.focus()
+  area.select()
+  try {
+    return document.execCommand('copy')
+  } finally {
+    area.remove()
+  }
+}
+
+async function copyDiagnosticText(text: string): Promise<void> {
+  // Keep the first attempt synchronous so the user gesture survives inside
+  // WebView2/srcdoc frames where Clipboard API permission is unavailable.
+  if (copyWithDocumentCommand(text)) return
+  if (typeof navigator.clipboard?.writeText === 'function') {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+  throw new Error('clipboard unavailable')
+}
+
 /** Framework-independent, light-DOM error component. No hidden brand filtering. */
 export class FigureErrorElement extends HTMLElement {
   private failure: FigureFailure = Object.freeze({code:'FIGURE_OPERATION_FAILED',raw:''})
@@ -97,7 +127,7 @@ export class FigureErrorElement extends HTMLElement {
     pre.style.cssText='max-height:240px;max-width:100%;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;color:var(--oc-txt,var(--color-ink,#243028));background:var(--oc-surface,var(--color-surface,#fafafa));padding:8px;'
     const status=document.createElement('span');status.setAttribute('role','status');status.style.display='block'
     const copy=document.createElement('button');copy.type='button';copy.textContent=c.copy;copy.dataset.copyDiagnostics=''
-    copy.onclick=async()=>{try{if(!navigator.clipboard?.writeText)throw new Error('unavailable');await navigator.clipboard.writeText(this.failure.raw);status.textContent=c.copied}catch{status.textContent=c.copyFailed}}
+    copy.onclick=async()=>{try{await copyDiagnosticText(this.failure.raw);status.textContent=c.copied}catch{status.textContent=c.copyFailed}}
     const download=document.createElement('button');download.type='button';download.textContent=c.download;download.dataset.saveDiagnostics=''
     download.onclick=()=>{const u=URL.createObjectURL(new Blob([this.failure.raw],{type:'text/plain;charset=utf-8'}));const a=document.createElement('a');a.href=u;a.download='omicos-figure-diagnostics.txt';a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}
     for(const b of [copy,download])b.style.cssText='margin:4px 8px 4px 0;padding:4px 8px;border:1px solid var(--oc-border,#aaa);border-radius:var(--radius-btn,6px);background:var(--oc-surface,#fff);color:var(--oc-txt,#243028);cursor:pointer;font:inherit;'

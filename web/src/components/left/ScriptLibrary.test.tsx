@@ -56,8 +56,12 @@ const entry = (over: Partial<ScriptInventoryEntry>): ScriptInventoryEntry => ({
   ...over,
 })
 
-const view = (all: ScriptInventoryEntry[], scripts: RegistryView['scripts'] = {}): RegistryView => ({
-  source: 'tavotto_registry.json',
+const view = (
+  all: ScriptInventoryEntry[],
+  scripts: RegistryView['scripts'] = {},
+  source = 'tavotto_registry.json',
+): RegistryView => ({
+  source,
   scripts,
   candidates: [],
   conflicts: {},
@@ -189,6 +193,20 @@ describe('脚本区列表', () => {
 })
 
 describe('运行 / 取消 / 结果', () => {
+  it('MCP 会话脚本显示已关联且不暴露不可用的 HTTP 重新运行按钮', async () => {
+    mockRegistry.mockResolvedValue(
+      view(
+        [entry({ script: 'figure.py', registered: true, reason: 'registered' })],
+        { 'figure.py': { entry: 'main', cost: 'medium', notes: '', stems: ['figure'] } },
+        'mcp-session',
+      ),
+    )
+    await mount()
+    expect(host.textContent).toContain('已关联 1 张图')
+    expect(host.querySelector('button[aria-label*="并发现图"]')).toBeNull()
+    expect(mockProbe).not.toHaveBeenCalled()
+  })
+
   it('点击「运行并发现图」→ 调 probe、显示 loading、可取消；取消后焦点留在原按钮', async () => {
     mockRegistry.mockResolvedValue(view([entry({ script: 'show.py' })]))
     let resolveProbe!: (r: ProbeResult) => void
